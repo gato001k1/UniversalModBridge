@@ -149,7 +149,7 @@ function Get-PinnedSha1([string]$RelativeUrl) {
 function Download-LibraryPath([string]$RelativePath, [string]$Destination) {
   $relativeUrl = ($RelativePath -replace '\\', '/')
   $pinned = Get-PinnedSha1 $relativeUrl
-  foreach ($base in @('https://maven.minecraftforge.net', 'https://repo1.maven.org/maven2')) {
+  foreach ($base in @('https://maven.minecraftforge.net', 'https://repo1.maven.org/maven2', 'https://libraries.minecraft.net')) {
     $url = "$base/$relativeUrl"
     try {
       # Some old Forge-hosted libraries have no .sha1 next to them; use the checked-in pin.
@@ -157,7 +157,7 @@ function Download-LibraryPath([string]$RelativePath, [string]$Destination) {
       Download-Verified $url $sha $Destination
       return
     } catch {
-      if ($base -eq 'https://repo1.maven.org/maven2') { throw "Unable to fetch Forge launcher library $RelativePath" }
+      if ($base -eq 'https://libraries.minecraft.net') { throw "Unable to fetch Forge launcher library $RelativePath" }
     }
   }
 }
