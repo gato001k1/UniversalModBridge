@@ -10,6 +10,7 @@ tools/*
 !tools/*.py
 !tools/*.cmd
 !tools/*.java
+!tools/forge-1710-launch-classpath.txt
 
 # Downloaded Minecraft/Forge jars, mappings and generated data (tools/ci-fetch.ps1)
 research/

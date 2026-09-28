@@ -178,6 +178,10 @@ function Get-MavenRelativePath([string]$Coordinate) {
 
 function Write-ForgeClasspath([string]$V17Root, [string]$ForgeJar, [string]$LaunchWrapperJar, [string]$ClientJar, [string]$Output) {
   $launchCommandPath = Join-Path $V17Root 'launch-cmd.txt'
+  if (-not (Test-Path -LiteralPath $launchCommandPath)) {
+    # Fresh checkouts use the checked-in classpath order from the official 1.7.10 Forge launcher.
+    $launchCommandPath = Join-Path $PSScriptRoot 'forge-1710-launch-classpath.txt'
+  }
   if (-not (Test-Path -LiteralPath $launchCommandPath)) { throw "Missing Forge launcher metadata: $launchCommandPath" }
 
   # Forge's official universal jar carries the version JSON used by its launcher.
