@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Replacement for the log4j2.xml that ships inside the Forge universal jar.
+
+  Forge's own config declares a <Queue> appender supplied by com.mojang.util.QueueLogAppender (a
+  class that lives in the vanilla jar, which our net.minecraft-only runtime jar does not carry) plus
+  a <Routing>/${ctx:side} indirection and OnStartupTriggeringPolicy rollovers. On log4j 2.0-beta9
+  running under Java 25 every one of those is an extra chance to fail before FML has said a word, and
+  none of them is useful for a headless boot. Console only: the launcher tees stdout to a file.
+-->
+<Configuration status="WARN">
+    <Appenders>
+        <Console name="SysOut" target="SYSTEM_OUT">
+            <PatternLayout pattern="[%d{HH:mm:ss}] [%t/%level] [%logger]: %msg%n"/>
+        </Console>
+    </Appenders>
+    <Loggers>
+        <Root level="info">
+            <AppenderRef ref="SysOut"/>
+        </Root>
+    </Loggers>
+</Configuration>

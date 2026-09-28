@@ -1,0 +1,10 @@
+dependencies {
+    // One ASM version everywhere (D4): 9.9 is the floor that parses Java 25 / MC 26.x
+    // classfiles (major 69); 9.7.1 silently yields empty analysis on them.
+    api 'org.ow2.asm:asm:9.9'
+    api 'org.ow2.asm:asm-tree:9.9'
+    api 'com.google.code.gson:gson:2.11.0'
+    testImplementation platform('org.junit:junit-bom:5.10.2')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}

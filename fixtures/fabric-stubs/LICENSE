@@ -1,0 +1,8 @@
+These compile-only interface stubs mirror the public shape of fabric-loader's
+net.fabricmc.api entrypoint interfaces for building self-authored UMB fixtures.
+
+The interfaces are one abstract method each, redeclared from the published API.
+They are not copied source from FabricMC, carry no implementation, and are
+distributed only inside this repository's test fixtures (CC0-1.0 like the
+fixtures they build). At runtime the real interfaces always come from
+fabric-loader itself; these stubs never ship in any artifact.

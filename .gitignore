@@ -1,0 +1,42 @@
+# Build output
+build/
+.gradle/
+**/build/
+*.class
+
+# Toolchain downloaded by the build scripts (JDKs, JUnit jars)
+tools/*
+!tools/*.ps1
+!tools/*.py
+!tools/*.cmd
+!tools/*.java
+
+# Downloaded Minecraft/Forge jars, mappings and generated data (tools/ci-fetch.ps1)
+research/
+
+# Third-party binaries: never commit Minecraft, Forge or mod jars
+*.jar
+*.zip
+
+# Game instances, worlds, logs, screenshots
+instances/
+run/
+runs/
+saves/
+screenshots/
+crash-reports/
+logs/
+*.log
+options.txt
+
+# Local scratch
+scratch/
+tmp/
+cache/
+
+# Editor and OS files
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db

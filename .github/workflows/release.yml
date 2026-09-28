@@ -1,0 +1,77 @@
+name: UMB alpha release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*-alpha.*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish alpha
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Cache downloaded build inputs
+        uses: actions/cache@v4
+        with:
+          path: |
+            .ci-cache
+            research/jars
+            research/visual
+            research/mappings/ci-mcp-1.7.10-srg.zip
+            tools/junit
+            research/out/legacy/1.7.10-forge-srg-runtime.jar
+          key: umb-inputs-${{ runner.os }}-${{ hashFiles('tools/ci-fetch.ps1', 'research/jars/*.json', 'umb-legacy-1165/resources/classpath-1165.txt') }}
+
+      - name: Download and verify official build inputs
+        shell: pwsh
+        run: pwsh -NoProfile -File tools/ci-fetch.ps1
+
+      - name: Fail when the legacy runtime is missing (release never skips legacy targets)
+        shell: pwsh
+        run: |
+          $jar = 'research/out/legacy/1.7.10-forge-srg-runtime.jar'
+          if (-not (Test-Path -LiteralPath $jar)) {
+            throw "Release builds require the legacy 1.7.10 Forge SRG runtime jar at $jar, but ci-fetch did not provide it. It cannot be regenerated from Mojang/Forge inputs and is only restored from the CI cache. Aborting: the legacy 1.7.10 targets are mandatory for a release."
+          }
+          Write-Host "Legacy runtime present: $jar"
+
+      - name: Build, test and create the release bundle
+        shell: pwsh
+        run: |
+          java tools/UmbBuild.java test
+          java tools/UmbBuild.java release-bundle
+
+      - name: Name the bundle and write SHA256SUMS
+        shell: pwsh
+        run: |
+          $version = if ($env:GITHUB_REF -like 'refs/tags/*') { $env:GITHUB_REF_NAME.Substring(1) } else { 'manual-' + $env:GITHUB_SHA.Substring(0, 7) }
+          $built = Get-ChildItem dist -Filter 'umb-*.zip' | Select-Object -First 1
+          if (-not $built) { throw 'release-bundle did not produce a zip' }
+          $published = Join-Path $built.DirectoryName "umb-$version.zip"
+          if ($built.FullName -ne $published) { Copy-Item -LiteralPath $built.FullName -Destination $published -Force; Remove-Item -LiteralPath $built.FullName -Force }
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $published).Hash.ToLowerInvariant()
+          "$hash  $(Split-Path -Leaf $published)" | Set-Content -LiteralPath (Join-Path $built.DirectoryName 'SHA256SUMS') -Encoding ascii
+          Write-Host "release=$published"
+
+      - name: Publish GitHub Release with generated notes
+        uses: softprops/action-gh-release@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          generate_release_notes: true
+          files: |
+            dist/umb-*.zip
+            dist/SHA256SUMS

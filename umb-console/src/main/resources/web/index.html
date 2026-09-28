@@ -1,0 +1,450 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UMB legacy console</title>
+<style>
+  :root{
+    --bg:#0e1116; --panel:#151a21; --panel2:#1b222b; --line:#262e39;
+    --fg:#dde3ea; --dim:#8b98a8; --accent:#5aa9ff; --accent2:#7de2b0;
+    --ok:#42c98a; --warn:#e8b64c; --bad:#ff6b6b; --skip:#7f8c9b; --dry:#a98bff; --run:#5aa9ff;
+    --mono:ui-monospace,"Cascadia Mono",Consolas,"Courier New",monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+       font:13px/1.5 system-ui,"Segoe UI",Roboto,sans-serif}
+  a{color:var(--accent)}
+  header{display:flex;flex-wrap:wrap;gap:12px;align-items:center;
+         padding:10px 16px;border-bottom:1px solid var(--line);background:var(--panel);
+         position:sticky;top:0;z-index:20}
+  header h1{font-size:15px;margin:0;font-weight:600;letter-spacing:.02em}
+  header .sub{color:var(--dim);font-size:11px;font-family:var(--mono)}
+  .grow{flex:1}
+  .wrap{max-width:1500px;margin:0 auto;padding:14px 16px 40px;
+        display:grid;gap:14px;grid-template-columns:minmax(280px,340px) 1fr}
+  @media (max-width:1000px){.wrap{grid-template-columns:1fr}}
+  .col{display:flex;flex-direction:column;gap:14px;min-width:0}
+  section{background:var(--panel);border:1px solid var(--line);border-radius:8px;overflow:hidden}
+  section > h2{margin:0;padding:9px 12px;font-size:12px;font-weight:600;letter-spacing:.06em;
+               text-transform:uppercase;color:var(--dim);border-bottom:1px solid var(--line);
+               background:var(--panel2);display:flex;align-items:center;gap:8px}
+  section > h2 .rt{margin-left:auto;font-weight:400;text-transform:none;letter-spacing:0;
+                   font-family:var(--mono);font-size:11px}
+  .body{padding:10px 12px}
+  .body.tight{padding:0}
+  button{background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:5px;
+         padding:4px 9px;font:inherit;font-size:12px;cursor:pointer}
+  button:hover:not(:disabled){border-color:var(--accent);color:#fff}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  button.primary{background:#1d3b5c;border-color:#2b5f92}
+  button.danger{background:#4a1f24;border-color:#7d3038}
+  .modlist{max-height:260px;overflow:auto}
+  .mod{display:block;width:100%;text-align:left;border:0;border-bottom:1px solid var(--line);
+       background:none;border-radius:0;padding:8px 12px;cursor:pointer}
+  .mod:hover{background:var(--panel2)}
+  .mod.sel{background:#17293d;box-shadow:inset 3px 0 0 var(--accent)}
+  .mod .n{font-weight:600}
+  .mod .m{font-family:var(--mono);font-size:11px;color:var(--dim);word-break:break-all}
+  table{border-collapse:collapse;width:100%;font-size:12px}
+  th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--dim);font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:.04em}
+  td.acts{white-space:nowrap}
+  .badge{display:inline-block;padding:1px 7px;border-radius:10px;font-size:11px;font-weight:600;
+         font-family:var(--mono);border:1px solid transparent}
+  .b-ok{background:rgba(66,201,138,.15);color:var(--ok);border-color:rgba(66,201,138,.4)}
+  .b-failed{background:rgba(255,107,107,.15);color:var(--bad);border-color:rgba(255,107,107,.4)}
+  .b-skipped{background:rgba(127,140,155,.15);color:var(--skip);border-color:rgba(127,140,155,.4)}
+  .b-dryrun{background:rgba(169,139,255,.15);color:var(--dry);border-color:rgba(169,139,255,.4)}
+  .b-never{background:rgba(127,140,155,.08);color:var(--skip);border-color:rgba(127,140,155,.2)}
+  .b-slotbusy{background:rgba(232,182,76,.15);color:var(--warn);border-color:rgba(232,182,76,.4)}
+  .b-running{background:rgba(90,169,255,.18);color:var(--run);border-color:rgba(90,169,255,.5)}
+  .counts{font-family:var(--mono);font-size:11px;color:var(--dim);word-break:break-word}
+  .counts b{color:#b9c6d4;font-weight:600}
+  .err{color:var(--bad);font-family:var(--mono);font-size:11px;word-break:break-word}
+  #log{margin:0;padding:10px 12px;height:340px;overflow:auto;background:#0a0d12;
+       font-family:var(--mono);font-size:11.5px;white-space:pre-wrap;word-break:break-word}
+  #log .l-warn{color:var(--warn)} #log .l-stage{color:var(--accent2);font-weight:600}
+  #log .l-cmd{color:var(--dry)} #log .l-err{color:var(--bad)} #log .l-child{color:var(--dim)}
+  .slot{display:flex;gap:8px;align-items:center;font-family:var(--mono);font-size:11.5px}
+  .dot{width:9px;height:9px;border-radius:50%;flex:0 0 auto}
+  .dot.free{background:var(--ok);box-shadow:0 0 8px rgba(66,201,138,.7)}
+  .dot.busy{background:var(--warn);box-shadow:0 0 8px rgba(232,182,76,.7)}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(118px,1fr));gap:8px;
+        max-height:330px;overflow:auto}
+  .grid figure{margin:0;background:var(--panel2);border:1px solid var(--line);border-radius:6px;
+               overflow:hidden;cursor:zoom-in}
+  .grid img{display:block;width:100%;height:76px;object-fit:cover;background:#000}
+  .grid figcaption{padding:3px 5px;font-family:var(--mono);font-size:9.5px;color:var(--dim);
+                   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  pre.rep{margin:0;padding:8px 12px;max-height:200px;overflow:auto;background:#0a0d12;
+          font-family:var(--mono);font-size:11px;white-space:pre-wrap}
+  #docs{margin:0;padding:10px 12px;max-height:420px;overflow:auto;background:#0a0d12;
+        font-family:var(--mono);font-size:11px;white-space:pre-wrap}
+  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  label.chk{display:flex;gap:5px;align-items:center;color:var(--dim);font-size:12px}
+  .hint{color:var(--dim);font-size:11px}
+  dialog{background:var(--panel);color:var(--fg);border:1px solid var(--line);border-radius:8px;
+         max-width:96vw;max-height:96vh;padding:0}
+  dialog::backdrop{background:rgba(0,0,0,.8)}
+  dialog img{display:block;max-width:94vw;max-height:84vh}
+  dialog .cap{padding:6px 10px;font-family:var(--mono);font-size:11px;color:var(--dim);
+              display:flex;gap:10px;align-items:center}
+  .kv{font-family:var(--mono);font-size:11px;color:var(--dim)}
+</style>
+</head>
+<body>
+<header>
+  <h1>UMB &middot; legacy bridge console</h1>
+  <span class="sub" id="hdrmod">no mod selected</span>
+  <span class="grow"></span>
+  <span class="slot"><span class="dot" id="slotdot"></span><span id="slottxt">slot ?</span></span>
+  <button id="refresh">refresh</button>
+</header>
+
+<div class="wrap">
+  <div class="col">
+    <section>
+      <h2>Mods <span class="rt" id="modcount"></span></h2>
+      <div class="body tight modlist" id="mods"></div>
+      <div class="body hint" id="moddirs"></div>
+    </section>
+
+    <section>
+      <h2>Window slot</h2>
+      <div class="body" id="slotbody"></div>
+    </section>
+
+    <section>
+      <h2>Gates</h2>
+      <div class="body">
+        <div class="row" id="gates"></div>
+        <div class="kv" id="gateout" style="margin-top:8px"></div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Docs <span class="rt"><select id="docpick"></select></span></h2>
+      <pre id="docs">(pick a document)</pre>
+    </section>
+  </div>
+
+  <div class="col">
+    <section>
+      <h2>Pipeline
+        <span class="rt">
+          <label class="chk"><input type="checkbox" id="autoref" checked> auto-refresh</label>
+        </span>
+      </h2>
+      <div class="body">
+        <div class="row">
+          <button class="primary" id="runall">Run all</button>
+          <button id="runalldry">Dry-run all</button>
+          <button id="runstatus">status</button>
+          <span class="grow"></span>
+          <label class="chk">run name <input id="runname" size="10" placeholder="auto"
+                 style="background:var(--panel2);color:var(--fg);border:1px solid var(--line);
+                        border-radius:4px;padding:2px 5px;font:inherit"></label>
+          <label class="chk"><input type="checkbox" id="stopafter"> -StopAfter (launch)</label>
+        </div>
+      </div>
+      <table id="pipe">
+        <thead><tr><th>stage</th><th>status</th><th>last</th><th>counts</th><th>run</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Live log <span class="rt" id="jobinfo">idle</span></h2>
+      <div class="body">
+        <div class="row">
+          <button class="danger" id="stopjob" disabled>Stop job</button>
+          <label class="chk"><input type="checkbox" id="tail" checked> follow</label>
+          <span class="grow"></span>
+          <span class="kv" id="joberr"></span>
+        </div>
+      </div>
+      <pre id="log">(no job yet - press a Run button)</pre>
+    </section>
+
+    <section>
+      <h2>Evidence <span class="rt" id="shotcount"></span></h2>
+      <div class="body tight"><div class="grid" id="shots"></div></div>
+      <div class="body"><div class="kv" id="agentsum"></div></div>
+      <pre class="rep" id="packrep">(no pack report)</pre>
+    </section>
+  </div>
+</div>
+
+<dialog id="zoom">
+  <div class="cap"><span id="zcap"></span><span class="grow"></span>
+    <a id="zlink" target="_blank">open raw</a>
+    <button onclick="document.getElementById('zoom').close()">close</button></div>
+  <img id="zimg" alt="">
+</dialog>
+
+<script>
+"use strict";
+const $ = s => document.querySelector(s);
+const el = (t, c, txt) => { const e = document.createElement(t); if (c) e.className = c;
+  if (txt !== undefined) e.textContent = txt; return e; };
+const STAGES = ["analyze","extract","rendermap","pack","probe","launch"];
+let mods = [], sel = null, jobId = null, es = null, lastStages = null;
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  const t = await r.text();
+  let j = null;
+  try { j = t ? JSON.parse(t) : null; } catch (e) { throw new Error("bad JSON from " + path); }
+  if (!r.ok) throw new Error((j && j.error) || (r.status + " " + path));
+  return j;
+}
+const post = (p, body) => api(p, {method:"POST", headers:{"Content-Type":"application/json"},
+                                 body: JSON.stringify(body || {})});
+const fmtBytes = n => n < 0 ? "?" :
+  n > 1048576 ? (n/1048576).toFixed(1)+" MB" : n > 1024 ? (n/1024).toFixed(0)+" KB" : n+" B";
+const fmtMs = n => !n ? "" : n < 1000 ? n+" ms" : (n/1000).toFixed(1)+" s";
+const ago = ms => { if (!ms) return ""; const s = (Date.now()-ms)/1000;
+  return s < 90 ? Math.round(s)+"s ago" : s < 5400 ? Math.round(s/60)+"m ago" : Math.round(s/3600)+"h ago"; };
+
+// ------------------------------------------------------------------ mods
+async function loadMods() {
+  const j = await api("/api/mods");
+  mods = j.mods || [];
+  const box = $("#mods"); box.textContent = "";
+  $("#modcount").textContent = mods.length + " jar" + (mods.length === 1 ? "" : "s");
+  if (!mods.length) box.appendChild(el("div", "body hint",
+    "no jars found. Drop a 1.7.10 Forge mod into research\\mods-hbm\\ or legacy-mods\\."));
+  mods.forEach(m => {
+    const b = el("button", "mod" + (sel && sel.path === m.path ? " sel" : ""));
+    b.appendChild(el("div", "n", (m.name || m.modid) + "  " + (m.version || "")));
+    b.appendChild(el("div", "m", m.repoPath + "   " + fmtBytes(m.sizeBytes) +
+                                 "   modid=" + m.modid + (m.mcversion ? "  mc=" + m.mcversion : "")));
+    if (m.error) b.appendChild(el("div", "err", m.error));
+    b.onclick = () => { sel = m; loadMods(); refreshAll(); };
+    box.appendChild(b);
+  });
+  const dirs = Object.entries(j.searched || {})
+    .map(([d, ok]) => (ok ? "✓ " : "× ") + d).join("   ");
+  $("#moddirs").textContent = "searched: " + dirs;
+  $("#hdrmod").textContent = sel ? (sel.modid + "  ←  " + sel.repoPath) : "no mod selected";
+}
+
+// ------------------------------------------------------------------ pipeline
+function badge(status) {
+  const cls = {ok:"b-ok", failed:"b-failed", skipped:"b-skipped", "dry-run":"b-dryrun",
+               never:"b-never", "slot-busy":"b-slotbusy", unreadable:"b-failed"}[status] || "b-never";
+  return el("span", "badge " + cls, status);
+}
+function countsCell(s) {
+  const d = el("div", "counts");
+  const keys = Object.keys(s.counts || {});
+  keys.slice(0, 8).forEach((k, i) => {
+    if (i) d.appendChild(document.createTextNode("  "));
+    d.appendChild(el("b", null, k + "="));
+    d.appendChild(document.createTextNode(String(s.counts[k])));
+  });
+  if (keys.length > 8) d.appendChild(document.createTextNode("  +" + (keys.length - 8) + " more"));
+  if (s.error) { d.appendChild(document.createElement("br")); d.appendChild(el("span", "err", s.error)); }
+  return d;
+}
+async function loadStatus() {
+  if (!sel) return;
+  const j = await api("/api/status?mod=" + encodeURIComponent(sel.repoPath));
+  lastStages = j.stages;
+  const tb = $("#pipe tbody"); tb.textContent = "";
+  j.stages.forEach(s => {
+    const tr = el("tr");
+    tr.appendChild(el("td", null, s.stage));
+    const td1 = el("td"); td1.appendChild(badge(s.status)); tr.appendChild(td1);
+    tr.appendChild(el("td", "counts", (fmtMs(s.durationMs) + "  " +
+      (s.endedAt ? s.endedAt.replace("T", " ").replace(/\..*$/, "") : "")).trim()));
+    tr.appendChild(countsCell(s));
+    const acts = el("td", "acts");
+    const mk = (label, cls, body, title) => {
+      const b = el("button", cls, label); b.title = title || "";
+      b.onclick = () => run(Object.assign({stage: s.stage}, body));
+      acts.appendChild(b); acts.appendChild(document.createTextNode(" "));
+    };
+    mk("Run", s.status === "never" ? "primary" : "", {},
+       "harness\\legacy.ps1 " + s.stage + " -Mod " + sel.repoPath);
+    mk("Rerun", "", {force: true}, "... -Force");
+    mk("Dry", "", {dryRun: true}, "... -DryRun");
+    tr.appendChild(acts);
+    tb.appendChild(tr);
+  });
+  if (j.job && j.job.running && j.job.jobId !== jobId) attach(j.job.jobId);
+}
+
+// ------------------------------------------------------------------ jobs / log
+function logLine(text) {
+  const pre = $("#log");
+  let cls = "";
+  if (/^\[legacy\] WARN/.test(text)) cls = "l-warn";
+  else if (/^\[legacy\] (STAGE|=====)/.test(text) || /^\[legacy\] ={3,}/.test(text)) cls = "l-stage";
+  else if (/^\$ /.test(text) || /WOULD |RUN: |DRIVE: /.test(text)) cls = "l-cmd";
+  else if (/^  ! /.test(text) || /FAIL|Exception|error:/i.test(text)) cls = "l-err";
+  else if (/^  \| /.test(text)) cls = "l-child";
+  const span = el("span", cls, text + "\n");
+  pre.appendChild(span);
+  while (pre.childNodes.length > 6000) pre.removeChild(pre.firstChild);
+  if ($("#tail").checked) pre.scrollTop = pre.scrollHeight;
+}
+function attach(id) {
+  if (es) { es.close(); es = null; }
+  jobId = id;
+  $("#log").textContent = "";
+  $("#stopjob").disabled = false;
+  $("#joberr").textContent = "";
+  es = new EventSource("/api/jobs/" + id + "/events");
+  es.addEventListener("hello", e => {
+    const j = JSON.parse(e.data);
+    $("#jobinfo").textContent = j.label + "  ·  job " + j.jobId;
+  });
+  es.addEventListener("line", e => logLine(e.data));
+  es.addEventListener("end", e => {
+    const j = JSON.parse(e.data);
+    $("#jobinfo").textContent = j.label + "  ·  exit=" + j.exitCode;
+    $("#stopjob").disabled = true;
+    es.close(); es = null;
+    refreshAll();
+    gateResult(j.jobId);
+  });
+  es.onerror = () => { $("#joberr").textContent = "log stream closed"; if (es) { es.close(); es = null; } };
+}
+async function run(body) {
+  if (!sel) { alert("pick a mod first"); return; }
+  const payload = Object.assign({mod: sel.repoPath}, body);
+  const name = $("#runname").value.trim();
+  if (name) payload.name = name;
+  if ($("#stopafter").checked) payload.stopAfter = true;
+  try {
+    const j = await post("/api/run", payload);
+    attach(j.jobId);
+  } catch (e) { $("#joberr").textContent = String(e.message || e); }
+}
+async function gateResult(id) {
+  try {
+    const j = await api("/api/jobs/" + id);
+    const g = j.gate || {};
+    const parts = Object.entries(g).map(([k, v]) => k + "=" + v);
+    if (parts.length) $("#gateout").textContent = j.label + ": " + parts.join("  ");
+  } catch (e) { /* the job list rotated; nothing to show */ }
+}
+
+// ------------------------------------------------------------------ slot
+async function loadSlot() {
+  const j = await api("/api/slot");
+  const busy = !!j.busy;
+  $("#slotdot").className = "dot " + (busy ? "busy" : "free");
+  $("#slottxt").textContent = busy ? "slot BUSY" : "slot free";
+  const b = $("#slotbody"); b.textContent = "";
+  if (!busy) {
+    b.appendChild(el("div", "kv", "FREE — no Minecraft window is open. extract / launch can take it."));
+  } else {
+    (j.holders || []).forEach(h => {
+      b.appendChild(el("div", "kv", "pid " + h.pid + "  [" + (h.run || "?") + "]  " + h.why));
+    });
+    b.appendChild(el("div", "hint", "extract / launch will poll every 15 s and then report slot-busy. " +
+      "Processes this console did not start are never killed."));
+  }
+  b.appendChild(el("div", "hint", "lock: " + j.lockFile));
+}
+
+// ------------------------------------------------------------------ evidence
+async function loadEvidence() {
+  if (!sel) return;
+  const q = "?mod=" + encodeURIComponent(sel.repoPath);
+  const sj = await api("/api/shots" + q);
+  const g = $("#shots"); g.textContent = "";
+  const shots = sj.shots || [];
+  $("#shotcount").textContent = shots.length + " screenshot" + (shots.length === 1 ? "" : "s");
+  shots.forEach(s => {
+    const f = el("figure");
+    const img = el("img"); img.loading = "lazy"; img.src = s.url; img.alt = s.name;
+    f.appendChild(img);
+    f.appendChild(el("figcaption", null, s.group + "/" + s.name));
+    f.onclick = () => {
+      $("#zimg").src = s.url; $("#zcap").textContent = s.group + "/" + s.name + "  " +
+        fmtBytes(s.sizeBytes) + "  " + ago(s.mtime);
+      $("#zlink").href = s.url; $("#zoom").showModal();
+    };
+    g.appendChild(f);
+  });
+  if (!shots.length) g.appendChild(el("div", "body hint", "no screenshots yet"));
+
+  const ej = await api("/api/evidence" + q);
+  const a = ej.agentLog;
+  const box = $("#agentsum"); box.textContent = "";
+  if (a) {
+    box.appendChild(el("div", null, "hostagent.log · " + ago(a.mtime) + " · " +
+      a.lines + " lines · " + a.errorLines + " ERROR/FAILED lines"));
+    if (a.summary) box.appendChild(el("div", null, a.summary));
+    const link = el("a", null, a.path); link.href = a.url; link.target = "_blank";
+    const d = el("div"); d.appendChild(link); box.appendChild(d);
+  } else box.appendChild(el("div", "hint", "no win-*/logs/hostagent.log yet"));
+  const rep = ej.packReport;
+  $("#packrep").textContent = rep ? rep.head.join("\n") : "(no pack report)";
+}
+
+// ------------------------------------------------------------------ gates + docs
+async function loadGates() {
+  const j = await api("/api/gates");
+  const box = $("#gates"); box.textContent = "";
+  const entries = Object.entries(j.gates || {});
+  if (!entries.length) box.appendChild(el("span", "hint", "no gate scripts found"));
+  entries.forEach(([name, script]) => {
+    const b = el("button", null, name);
+    b.title = "powershell -File " + script;
+    b.onclick = async () => {
+      try { const r = await post("/api/gates/run", {gate: name}); attach(r.jobId); }
+      catch (e) { $("#gateout").textContent = String(e.message || e); }
+    };
+    box.appendChild(b);
+  });
+}
+async function loadDocs(name) {
+  const j = await api("/api/docs" + (name ? "?name=" + encodeURIComponent(name) : ""));
+  const pick = $("#docpick");
+  if (!pick.options.length) {
+    (j.available || []).forEach(n => {
+      const o = el("option", null, n); o.value = n; pick.appendChild(o);
+    });
+    pick.value = j.name;
+    pick.onchange = () => loadDocs(pick.value);
+  }
+  $("#docs").textContent = j.text || "";
+}
+
+// ------------------------------------------------------------------ wiring
+async function refreshAll() {
+  try { await loadSlot(); } catch (e) { $("#slottxt").textContent = "slot ?"; }
+  try { await loadStatus(); } catch (e) { /* keep the last table */ }
+  try { await loadEvidence(); } catch (e) { /* keep the last evidence */ }
+}
+$("#refresh").onclick = () => { loadMods(); refreshAll(); };
+$("#runall").onclick = () => run({stage: "all"});
+$("#runalldry").onclick = () => run({stage: "all", dryRun: true});
+$("#runstatus").onclick = () => run({stage: "status"});
+$("#stopjob").onclick = async () => {
+  if (!jobId) return;
+  try {
+    const j = await post("/api/jobs/" + jobId + "/stop", {});
+    logLine("[console] stopped pids: " + (j.stopped || []).join(", "));
+  } catch (e) { $("#joberr").textContent = String(e.message || e); }
+};
+$("#zoom").addEventListener("click", e => { if (e.target.id === "zoom") $("#zoom").close(); });
+
+(async () => {
+  await loadMods();
+  if (!sel && mods.length) { sel = mods.find(m => m.modid === "hbm") || mods[0]; await loadMods(); }
+  await loadGates();
+  await loadDocs();
+  await refreshAll();
+  // Poll even while a job is streaming: the window-slot indicator and the pipeline badges are
+  // exactly what you want to watch DURING a launch, and the SSE stream carries neither.
+  setInterval(() => { if ($("#autoref").checked) refreshAll(); }, 8000);
+})();
+</script>
+</body>
+</html>

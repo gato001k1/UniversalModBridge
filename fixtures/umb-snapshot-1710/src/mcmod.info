@@ -1,0 +1,13 @@
+[{
+  "modid": "umbsnap",
+  "name": "UMB Snapshot",
+  "version": "0.1.0",
+  "mcversion": "1.7.10",
+  "description": "UniversalModBridge dynamic-extraction probe: dumps the fully initialised 1.7.10 block/item/tab/fluid/oredict registries (with stitched icon names) to JSON on the first main-menu tick, then exits.",
+  "credits": "UniversalModBridge (CC0-1.0)",
+  "authorList": ["UniversalModBridge"],
+  "url": "",
+  "logoFile": "",
+  "screenshots": [],
+  "dependencies": []
+}]

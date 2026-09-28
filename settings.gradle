@@ -1,0 +1,7 @@
+rootProject.name = 'universalmodbridge'
+
+include 'umb-core'        // ModAnalysis, version/loader detection, pipeline orchestration
+include 'umb-mappings'    // mapping graph, tiny-remapper integration, confidence scoring
+include 'umb-pipeline'    // jar transformation passes P01..P20
+include 'umb-cache'       // translated-jar cache keyed by source+env+translator versions
+include 'umb-cli'        // headless `umb` tool: analyze/translate/verify/test

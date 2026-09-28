@@ -1,0 +1,17 @@
+modLoader="javafml"
+loaderVersion="[47,)"
+license="CC0-1.0"
+
+[[mods]]
+modId="umb-fixture-hello-forge"
+version="0.1.0"
+displayName="UMB Hello Forge Fixture"
+description='''Minimal self-authored modern-Forge mod used by the UMB analyzer test corpus. Touches no Minecraft classes.'''
+authors="UniversalModBridge project"
+
+[[dependencies.umb-fixture-hello-forge]]
+    modId="minecraft"
+    type="required"
+    versionRange="[26.0,)"
+    ordering="NONE"
+    side="BOTH"

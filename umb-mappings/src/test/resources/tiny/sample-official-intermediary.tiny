@@ -1,0 +1,36 @@
+# sample-official-intermediary.tiny - hand-authored fixture for the umb-mappings suite.
+#
+# Three namespaces on purpose: the graph tests load this SAME file twice with
+# different column pairs (0->1 and 0->2), so any loader that hardcodes column
+# indices fails here. Per the format contract adopted by this module, member
+# descriptors are written in namespace[0] (official) form; the loader rewrites
+# them toward whichever column it is loading.
+tiny	2	0	official	intermediary	named
+
+# MinecraftServer.loadWorld takes World - ANOTHER mapped class - in its
+# descriptor, giving the cross-class descriptor translation logic real work.
+c	net/minecraft/server/MinecraftServer	net/minecraft/class_2966	com/example/server/Server
+	f	I	currentPlayer	field_13001	playersOnline
+	f	J	ticks	field_13002	elapsedTicks
+	m	()V	runServer	method_14001	tickServer
+	m	(Lnet/minecraft/world/World;)V	loadWorld	method_14002	openDimension
+		p	1	worldName	param_world_name	dimensionName
+
+c	net/minecraft/world/World	net/minecraft/class_111	com/example/world/Level
+	f	Z	isClientSide	field_11001	remoteFlag
+	m	()Z	isRemote	method_11001	isClientWorld
+	m	(Lnet/minecraft/world/World;)Ljava/lang/String;	displayName	method_11002	humanName
+		p	0	self	param_self	theSelf
+
+# Methods-only class: exercises a class row carrying no field rows.
+c	net/minecraft/block/Blocks	net/minecraft/class_2394	com/example/block/BlockPalette
+	m	()I	countAll	method_9515	paletteSize
+
+# Escaped-token case: the official-column name below is written with the tiny
+# v2 escape sequence backslash-t (two literal characters in the file) and must
+# parse back to a REAL tab character, while every surrounding raw tab stays a
+# column separator.
+c	net/minecraft/item/ItemStack	net/minecraft/class_1799	com/example/item/WornStack
+	f	Ljava/lang/String;	broken\ttooltip	field_broken_tooltip	brokenTooltipLabel
+
+# end of fixture

@@ -1,0 +1,6 @@
+package dev.umb.hostagent;
+import org.objectweb.asm.*; import org.objectweb.asm.tree.*; import java.lang.instrument.ClassFileTransformer; import java.security.ProtectionDomain;
+/** Injects the host input and effects sample at {@code Minecraft.runTick(boolean)}. */
+public final class LegacyClientTickPatcher implements ClassFileTransformer {
+ public byte[] transform(ClassLoader l,String n,Class<?> c,ProtectionDomain d,byte[] b){if(!"net/minecraft/client/Minecraft".equals(n))return null;try{ClassNode x=new ClassNode();new ClassReader(b).accept(x,0);for(MethodNode m:x.methods)if("runTick".equals(m.name)&&"(Z)V".equals(m.desc)){InsnList i=new InsnList();i.add(new MethodInsnNode(Opcodes.INVOKESTATIC,"net/minecraft/client/Minecraft","getInstance","()Lnet/minecraft/client/Minecraft;",false));i.add(new MethodInsnNode(Opcodes.INVOKESTATIC,"dev/umb/hostagent/input/LegacyClientInputHook","clientTick","(Lnet/minecraft/client/Minecraft;)V",false));m.instructions.insertBefore(m.instructions.getFirst(),i);ClassWriter w=new ClassWriter(ClassWriter.COMPUTE_MAXS);x.accept(w);AgentLog.loud("PATCHED LegacyClientTickPatcher");return w.toByteArray();} }catch(Throwable t){AgentLog.error("LegacyClientTickPatcher",t,3);}return null;}
+}

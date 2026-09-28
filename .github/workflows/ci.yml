@@ -1,0 +1,76 @@
+name: UMB CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    name: Build and test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Cache downloaded build inputs
+        uses: actions/cache@v4
+        with:
+          path: |
+            .ci-cache
+            research/jars
+            research/visual
+            research/mappings/ci-mcp-1.7.10-srg.zip
+            tools/junit
+            research/out/legacy/1.7.10-forge-srg-runtime.jar
+          key: umb-inputs-${{ runner.os }}-${{ hashFiles('tools/ci-fetch.ps1', 'research/jars/*.json', 'umb-legacy-1165/resources/classpath-1165.txt') }}
+
+      - name: Download and verify official build inputs
+        id: fetch
+        shell: pwsh
+        run: pwsh -NoProfile -File tools/ci-fetch.ps1
+
+      - name: Validate Linux-native fetched paths
+        if: runner.os == 'Linux'
+        shell: pwsh
+        run: |
+          $files = @(
+            'research/visual/mc1710-native/classpath.txt',
+            'research/visual/mc262-vanilla/classpath.txt',
+            'research/jars/1.12.2/classpath.txt',
+            'research/jars/1.16.5/classpath.txt'
+          )
+          foreach ($file in $files) {
+            if (-not (Test-Path -LiteralPath $file)) { throw "Missing generated classpath: $file" }
+            $text = Get-Content -LiteralPath $file -Raw
+            if ($text.Contains('\')) { throw "Windows separator in Linux classpath: $file" }
+            if ($text -match '(?i)\.exe') { throw "Windows executable in Linux classpath: $file" }
+          }
+          $native = Get-Content -LiteralPath 'research/visual/mc262-vanilla/classpath.txt' -Raw
+          if ($native -notmatch 'natives-linux') { throw 'Linux classpath has no Linux LWJGL native' }
+          if ($native -match 'natives-(windows|osx|macos)') { throw 'Linux classpath selected a non-Linux native' }
+
+      - name: Build and test every module (legacy 1.7.10 runtime available)
+        if: steps.fetch.outputs.legacy-runtime == 'present'
+        shell: pwsh
+        run: java tools/UmbBuild.java test
+
+      - name: Build and test without the legacy 1.7.10 runtime
+        if: steps.fetch.outputs.legacy-runtime != 'present'
+        shell: pwsh
+        run: |
+          java tools/UmbBuild.java test
+          Write-Host 'LEGACY-1710-SKIP: the legacy 1.7.10 build/test targets (SRG sanitize, field repair, Forge remap, legacyside, legacy JUnit gates) were skipped because research/out/legacy/1.7.10-forge-srg-runtime.jar was not available; ci-fetch cannot download it (it is gitignored and only restored from the CI cache), and release.yml still requires it. All non-legacy gates ran: hostagent, objbridge, rendermap, guimap, legacy-1165, legacy-1122.'

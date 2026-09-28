@@ -1,0 +1,115 @@
+# 1.16.5 legacy-universe classpath: explicit, version-pinned, in load order.
+# Same discipline as umb-legacy-1122/resources/classpath-1122.txt (never a directory walk:
+# a sorted recursive scan once picked the WRONG duplicate guava jar in the 1.7.10 lane).
+# Every path is repo-root-relative; Legacy1165Classpath.readManifest fails loudly on a miss.
+#
+# Provenance (verified 2026-09-23, see research/out/legacy-1165/ERA-1165-PLAN.md section 4):
+# - client.jar + libraries/** : Mojang piston-data (research/jars/1.16.5.json), obfuscated vanilla.
+# - forge universal 36.2.34 : maven.minecraftforge.net, SHA-1 verified (see ERA-1165-PLAN.md).
+# - modlauncher/eventbus/forgespi/coremods/accesstransformers : maven.minecraftforge.net,
+#   versions taken VERBATIM from the real installer's version.json (mainClass
+#   cpw.mods.modlauncher.Launcher); each SHA-1 verified.
+# - asm-9.1, log4j-api/core-2.15.0 : Maven Central, SHA-1 verified.
+# - ironchest test mod : Modrinth CDN, SHA-512 verified (see ERA-1165-PLAN.md).
+#
+# log4j version choice (same trap as 1.12.2's lane): the vanilla set ships log4j-api/core
+# 2.8.1, but Forge 36.2.34's version.json pins 2.15.0. 2.15.0 WINS; the 2.8.1 pair is
+# deliberately absent below (one shared log4j, newer, API-compatible upward).
+# (The obfuscated client.jar entry lives at the BOTTOM - see ORDER WARNING there.)
+# SRG-renamed + Forge-binpatched SERVER jars (produced in-lane by run-rename.ps1 from
+# Forge's own documented processors; SLIM/EXTRA/PATCHED SHAs all verified against the install
+# profile). TWO jars, in this order, compose the complete game exactly like a real install:
+# the PATCHED jar is a SPARSE overlay (1,274 classes: Forge-patched vanilla in SRG names plus
+# Forge-added classes, verified by class-list diff) laid OVER the full clean SRG jar
+# (3,914 classes). Placed before the vanilla libraries so SRG names resolve here; the
+# obfuscated client.jar stays for the a.class shape check AND because the server jars have no
+# client classes (net.minecraft.client.Minecraft still honestly CNFE).
+./research/out/legacy-1165/rename/output/mc-server-srg-patched-at.jar
+./research/out/legacy-1165/rename/output/mc-server-srg-at.jar
+# Client SRG jar (same Forge pipeline, CLIENT column, PATCHED_SHA verified): the universe is
+# client-capable (integrated-style), because Forge's own server binpatch adds the client-only
+# IChestLid interface to the server ChestTileEntity - a server-only composition cannot link
+# vanilla Blocks.<clinit>. See run-rename-client.ps1 + ERA-1165-PLAN.md round-2 notes.
+./research/out/legacy-1165/rename/output/mc-client-srg-at.jar
+./research/jars/1.16.5/libraries/com/google/code/gson/gson/2.8.0/gson-2.8.0.jar
+./research/jars/1.16.5/libraries/com/google/guava/guava/21.0/guava-21.0.jar
+./research/jars/1.16.5/libraries/com/ibm/icu/icu4j/66.1/icu4j-66.1.jar
+./research/jars/1.16.5/libraries/com/mojang/authlib/2.1.28/authlib-2.1.28.jar
+./research/jars/1.16.5/libraries/com/mojang/brigadier/1.0.17/brigadier-1.0.17.jar
+./research/jars/1.16.5/libraries/com/mojang/datafixerupper/4.0.26/datafixerupper-4.0.26.jar
+./research/jars/1.16.5/libraries/com/mojang/javabridge/1.0.22/javabridge-1.0.22.jar
+./research/jars/1.16.5/libraries/com/mojang/patchy/1.3.9/patchy-1.3.9.jar
+./research/jars/1.16.5/libraries/com/mojang/text2speech/1.11.3/text2speech-1.11.3.jar
+./research/jars/1.16.5/libraries/com/mojang/text2speech/1.11.3/text2speech-1.11.3-natives-windows.jar
+./research/jars/1.16.5/libraries/commons-codec/commons-codec/1.10/commons-codec-1.10.jar
+./research/jars/1.16.5/libraries/commons-io/commons-io/2.5/commons-io-2.5.jar
+./research/jars/1.16.5/libraries/commons-logging/commons-logging/1.1.3/commons-logging-1.1.3.jar
+./research/jars/1.16.5/libraries/io/netty/netty-all/4.1.25.Final/netty-all-4.1.25.Final.jar
+./research/jars/1.16.5/libraries/it/unimi/dsi/fastutil/8.2.1/fastutil-8.2.1.jar
+./research/jars/1.16.5/libraries/net/java/dev/jna/jna/4.4.0/jna-4.4.0.jar
+./research/jars/1.16.5/libraries/net/java/dev/jna/platform/3.4.0/platform-3.4.0.jar
+./research/jars/1.16.5/libraries/net/java/jinput/jinput/2.0.5/jinput-2.0.5.jar
+./research/jars/1.16.5/libraries/net/java/jutils/jutils/1.0.0/jutils-1.0.0.jar
+./research/jars/1.16.5/libraries/net/sf/jopt-simple/jopt-simple/5.0.3/jopt-simple-5.0.3.jar
+./research/jars/1.16.5/libraries/org/apache/commons/commons-compress/1.8.1/commons-compress-1.8.1.jar
+./research/jars/1.16.5/libraries/org/apache/commons/commons-lang3/3.5/commons-lang3-3.5.jar
+./research/jars/1.16.5/libraries/org/apache/httpcomponents/httpclient/4.3.3/httpclient-4.3.3.jar
+./research/jars/1.16.5/libraries/org/apache/httpcomponents/httpcore/4.3.2/httpcore-4.3.2.jar
+./research/jars/1.16.5/libraries/org/lwjgl/lwjgl/3.2.2/lwjgl-3.2.2.jar
+./research/jars/1.16.5/libraries/org/lwjgl/lwjgl/3.2.2/lwjgl-3.2.2-natives-windows.jar
+./research/jars/1.16.5/libraries/org/lwjgl/lwjgl-glfw/3.2.2/lwjgl-glfw-3.2.2.jar
+./research/jars/1.16.5/libraries/org/lwjgl/lwjgl-glfw/3.2.2/lwjgl-glfw-3.2.2-natives-windows.jar
+./research/jars/1.16.5/libraries/org/lwjgl/lwjgl-jemalloc/3.2.2/lwjgl-jemalloc-3.2.2.jar
+./research/jars/1.16.5/libraries/org/lwjgl/lwjgl-jemalloc/3.2.2/lwjgl-jemalloc-3.2.2-natives-windows.jar
+./research/jars/1.16.5/libraries/org/lwjgl/lwjgl-openal/3.2.2/lwjgl-openal-3.2.2.jar
+./research/jars/1.16.5/libraries/org/lwjgl/lwjgl-openal/3.2.2/lwjgl-openal-3.2.2-natives-windows.jar
+./research/jars/1.16.5/libraries/org/lwjgl/lwjgl-opengl/3.2.2/lwjgl-opengl-3.2.2.jar
+./research/jars/1.16.5/libraries/org/lwjgl/lwjgl-opengl/3.2.2/lwjgl-opengl-3.2.2-natives-windows.jar
+./research/jars/1.16.5/libraries/org/lwjgl/lwjgl-stb/3.2.2/lwjgl-stb-3.2.2.jar
+./research/jars/1.16.5/libraries/org/lwjgl/lwjgl-stb/3.2.2/lwjgl-stb-3.2.2-natives-windows.jar
+./research/jars/1.16.5/libraries/org/lwjgl/lwjgl-tinyfd/3.2.2/lwjgl-tinyfd-3.2.2.jar
+./research/jars/1.16.5/libraries/org/lwjgl/lwjgl-tinyfd/3.2.2/lwjgl-tinyfd-3.2.2-natives-windows.jar
+./research/jars/1.16.5/libraries/oshi-project/oshi-core/1.1/oshi-core-1.1.jar
+./research/out/legacy-1165/forge-1.16.5-36.2.34-universal.jar
+# Our own in-universe eventbus-transformation worker (umb-legacy1165-transform.jar, built by
+# build.ps1): must ride the manifest so the loader finds it child-first. It is OUR code, not
+# a fetched artifact.
+./umb-legacy-1165/build/umb-legacy1165-transform.jar
+# Our own legacyside (lifecycle driver, facades, bridge impl - built by build.ps1): must ride
+# the manifest so it loads inside the universe it drives.
+./umb-legacy-1165/build/umb-legacy1165-legacyside.jar
+# Forge's own server-launch jar (bundled inside the SHA-verified installer; hosts
+# fml/loading incl. FMLLoader + ModDiscoverer + ServerMain; local SHA-1
+# b05f056824252928b59c746f8a28fe2cf36db6c0, provenance = installer SHA).
+./research/out/legacy-1165/libs/forge-1.16.5-36.2.34-launch.jar
+./research/out/legacy-1165/ironchest-1.16.5-11.2.21.jar
+./research/out/legacy-1165/libs/modlauncher-8.1.3.jar
+./research/out/legacy-1165/libs/eventbus-4.0.0.jar
+./research/out/legacy-1165/libs/forgespi-3.2.0.jar
+./research/out/legacy-1165/libs/coremods-4.0.6.jar
+./research/out/legacy-1165/libs/accesstransformers-3.0.1.jar
+./research/out/legacy-1165/libs/asm-9.1.jar
+# Full ASM 9.1 set (production launch jar lists all five; ModLauncher's TransformStore needs
+# tree at Launcher construction). tree/commons/analysis promoted byte-identical from the
+# verified processor set; util fetched from Central SHA-1-verified this lane.
+./research/out/legacy-1165/libs/asm-tree-9.1.jar
+./research/out/legacy-1165/libs/asm-commons-9.1.jar
+./research/out/legacy-1165/libs/asm-analysis-9.1.jar
+./research/out/legacy-1165/libs/asm-util-9.1.jar
+./research/out/legacy-1165/libs/log4j-api-2.15.0.jar
+./research/out/legacy-1165/libs/log4j-core-2.15.0.jar
+# Forge's own TOML stack (mods.toml parsing, same lib Forge uses at runtime).
+./research/out/legacy-1165/libs/night-config-core-3.6.3.jar
+./research/out/legacy-1165/libs/night-config-toml-3.6.3.jar
+# Maven artifact versioning (ModInfo versions; version.json pins 3.6.3, Central SHA-1 verified).
+./research/out/legacy-1165/libs/maven-artifact-3.6.3.jar
+# Type resolution for eventbus listeners (version.json pins 0.8.3, Forge-maven SHA-1 verified).
+./research/out/legacy-1165/libs/typetools-0.8.3.jar
+#
+# ORDER WARNING (proven by failure): the Mojang-signed obfuscated client.jar sits LAST.
+# It contains 14 UNOBFUSCATED entry-point classes (net/minecraft/{client/main/Main,
+# data/Main, server/Main, server/MinecraftServer$1/$2}, verified by listing) under Mojang's
+# own signature. Anywhere earlier, those signed classes establish their packages and the
+# later UNSIGNED SRG siblings die with signer-mismatch SecurityExceptions. Last, the jar
+# serves only short obfuscated names (the a.class shape check) that exist nowhere else.
+./research/jars/1.16.5/client.jar

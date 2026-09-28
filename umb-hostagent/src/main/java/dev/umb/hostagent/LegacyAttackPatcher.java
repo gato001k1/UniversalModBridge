@@ -1,0 +1,6 @@
+package dev.umb.hostagent;
+import org.objectweb.asm.*; import org.objectweb.asm.tree.*; import java.lang.instrument.ClassFileTransformer; import java.security.ProtectionDomain;
+/** Early-return guard for Minecraft.startAttack(), the 26.2 vanilla left-click entry. */
+public final class LegacyAttackPatcher implements ClassFileTransformer {
+ public byte[] transform(ClassLoader l,String n,Class<?> c,ProtectionDomain d,byte[] b){if(!"net/minecraft/client/Minecraft".equals(n))return null;try{ClassNode x=new ClassNode();new ClassReader(b).accept(x,0);for(MethodNode m:x.methods)if("startAttack".equals(m.name)&&"()Z".equals(m.desc)){InsnList i=new InsnList();i.add(new MethodInsnNode(Opcodes.INVOKESTATIC,"dev/umb/hostagent/input/LegacyClientInputHook","suppressVanillaAttack","()Z",false));LabelNode ok=new LabelNode();i.add(new JumpInsnNode(Opcodes.IFEQ,ok));i.add(new InsnNode(Opcodes.ICONST_1));i.add(new InsnNode(Opcodes.IRETURN));i.add(ok);m.instructions.insertBefore(m.instructions.getFirst(),i);ClassWriter w=new ClassWriter(ClassWriter.COMPUTE_FRAMES);x.accept(w);AgentLog.loud("PATCHED LegacyAttackPatcher");return w.toByteArray();}}catch(Throwable t){AgentLog.error("LegacyAttackPatcher",t,3);}return null;}
+}

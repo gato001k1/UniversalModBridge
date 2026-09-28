@@ -1,0 +1,15 @@
+plugins { id 'application' }
+
+dependencies {
+    implementation project(':umb-core')
+    implementation project(':umb-mappings')
+    implementation project(':umb-pipeline')
+    implementation project(':umb-cache')
+    implementation 'info.picocli:picocli:4.7.6'
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+application {
+    mainClass = 'dev.umb.cli.UmbCli'
+}

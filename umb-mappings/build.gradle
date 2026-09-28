@@ -1,0 +1,13 @@
+dependencies {
+    api project(':umb-core')
+    api 'net.fabricmc:tiny-remapper:0.10.4'
+    api 'net.fabricmc:mapping-io:0.7.1'
+    // One ASM version everywhere (D4); asm-commons provides Remapper/ClassRemapper for
+    // the graph-driven jar remapper (added 2026-08-25).
+    api 'org.ow2.asm:asm:9.9'
+    api 'org.ow2.asm:asm-tree:9.9'
+    api 'org.ow2.asm:asm-commons:9.9'
+    testImplementation platform('org.junit:junit-bom:5.10.2')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
