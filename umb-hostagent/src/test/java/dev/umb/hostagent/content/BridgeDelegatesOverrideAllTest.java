@@ -22,7 +22,7 @@ import org.junit.jupiter.api.Test;
 class BridgeDelegatesOverrideAllTest {
     @Test
     void delegatesOverrideEveryBridgeMethod() {
-        for (Class<?> delegate : new Class<?>[] {BridgeRouter.class, UmbUniverse.class, Legacy1165Universe.class}) {
+        for (Class<?> delegate : new Class<?>[] {BridgeRouter.class, UmbUniverse.class, Legacy1122Universe.class, Legacy1165Universe.class}) {
             List<String> missing = new ArrayList<>();
             for (Method m : LegacyBridge.class.getMethods()) {
                 if (Modifier.isStatic(m.getModifiers())) continue;

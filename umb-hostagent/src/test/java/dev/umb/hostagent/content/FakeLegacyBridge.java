@@ -34,14 +34,27 @@ final class FakeLegacyBridge implements LegacyBridge {
     List<double[]> collisionBoxesResult;
     List<double[]> selectionBoxesResult;
     int invalidateShapeCallCount;
+    /** Regression guard: a client-thread shape query must never reach the shared legacy bridge. */
+    int collisionBoxesCallCount;
+    int selectionBoxesCallCount;
+
+    /** What the server computed earlier; the client may read it, never compute it. */
+    List<double[]> cachedShapeResult;
+
+    @Override
+    public List<double[]> cachedShape(String legacyBlockId, int x, int y, int z, boolean selection) {
+        return cachedShapeResult;
+    }
 
     @Override
     public List<double[]> collisionBoxes(String legacyBlockId, int x, int y, int z) {
+        collisionBoxesCallCount++;
         return collisionBoxesResult;
     }
 
     @Override
     public List<double[]> selectionBoxes(String legacyBlockId, int x, int y, int z) {
+        selectionBoxesCallCount++;
         return selectionBoxesResult;
     }
 
@@ -382,6 +395,19 @@ final class FakeLegacyBridge implements LegacyBridge {
         @Override
         public java.util.List<double[]> getCollisionBoxes() {
             return collisionBoxes;
+        }
+
+        boolean interactAccepted;
+        boolean attackAccepted;
+
+        @Override
+        public boolean interact(HostPlayer player) {
+            return interactAccepted;
+        }
+
+        @Override
+        public boolean attack(HostPlayer attacker, String damageType, float amount) {
+            return attackAccepted;
         }
 
         @Override

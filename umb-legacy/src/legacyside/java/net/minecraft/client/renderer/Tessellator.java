@@ -16,15 +16,15 @@ public class Tessellator {
     public void func_78380_c(int x) {}
     public void func_78386_a(float r,float g,float b) { LegacyRenderCapture.color(r,g,b,1); }
     public void func_78369_a(float r,float g,float b,float a) { LegacyRenderCapture.color(r,g,b,a); }
-    public void func_78376_a(int x,int y,int z) {}
-    public void func_78370_a(int r,int g,int b,int a) {}
-    public void func_154352_a(byte x,byte y,byte z) {}
-    public void func_78374_a(double x,double y,double z,double u,double v) { LegacyRenderCapture.vertex(x,y,z,u,v); }
-    public void func_78377_a(double x,double y,double z) { LegacyRenderCapture.vertex(x,y,z); }
-    public void func_78378_d(int x) {}
-    public void func_78384_a(int x,int y) {}
+    public void func_78376_a(int r,int g,int b) { LegacyRenderCapture.func_78376_a(this,r,g,b); }
+    public void func_78370_a(int r,int g,int b,int a) { LegacyRenderCapture.func_78370_a(this,r,g,b,a); }
+    public void func_154352_a(byte r,byte g,byte b) { LegacyRenderCapture.func_154352_a(this,r,g,b); }
+    public void func_78374_a(double x,double y,double z,double u,double v) { LegacyRenderCapture.func_78374_a(this,x,y,z,u,v); }
+    public void func_78377_a(double x,double y,double z) { LegacyRenderCapture.func_78377_a(this,x,y,z); }
+    public void func_78378_d(int rgb) { LegacyRenderCapture.func_78378_d(this,rgb); }
+    public void func_78384_a(int rgb,int alpha) { LegacyRenderCapture.func_78384_a(this,rgb,alpha); }
     public void func_78383_c() {}
     public void func_78375_b(float x,float y,float z) { LegacyRenderCapture.normal(x,y,z); }
-    public void func_78373_b(double x,double y,double z) { LegacyRenderCapture.vertex(x,y,z); }
-    public void func_78372_c(float x,float y,float z) {}
+    public void func_78373_b(double x,double y,double z) { LegacyRenderCapture.func_78373_b(this,x,y,z); }
+    public void func_78372_c(float x,float y,float z) { LegacyRenderCapture.func_78372_c(this,x,y,z); }
 }

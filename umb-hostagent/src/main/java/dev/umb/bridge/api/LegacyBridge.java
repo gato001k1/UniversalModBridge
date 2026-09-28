@@ -181,6 +181,33 @@ public interface LegacyBridge {
         return null;
     }
 
+    /**
+     * The last live shape the server computed for this position, without running any legacy
+     * code. Safe from any thread (client outline and movement collision use it); null means no
+     * cached answer, so callers keep their static fallback.
+     */
+    default java.util.List<double[]> cachedShape(String legacyBlockId, int x, int y, int z,
+            boolean selection) {
+        return null;
+    }
+
+    /**
+     * True when the legacy item has a registered custom item renderer that handles this render
+     * type (a legacy enum name, e.g. {@code EQUIPPED_FIRST_PERSON}). A plain registry lookup.
+     */
+    default boolean hasItemRenderer(String legacyItemId, int damage, String renderType) {
+        return false;
+    }
+
+    /**
+     * Runs the legacy item's custom renderer under GL emulation and returns the captured draws,
+     * or null when unavailable. {@code transformOnly} reuses a cached mesh with fresh matrices.
+     */
+    default EntityRenderCapture captureItem(String legacyItemId, int count, int damage, byte[] nbt,
+            String renderType, float partialTick, boolean transformOnly) {
+        return null;
+    }
+
     /** Invalidates cached live shape answers affected by a tile or neighbor state change. */
     default void invalidateShape(String legacyBlockId, int x, int y, int z) {
     }

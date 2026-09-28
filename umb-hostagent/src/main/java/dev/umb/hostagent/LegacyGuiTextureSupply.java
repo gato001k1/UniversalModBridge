@@ -3,6 +3,7 @@ package dev.umb.hostagent;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -15,7 +16,7 @@ import com.mojang.blaze3d.platform.NativeImage;
 
 /**
  * Loads legacy-side GUI textures that no 26.2 pack provides: per-era vanilla GUI sheets and
- * stitched legacy atlases, both exported as PNGs beside the game dir and referenced through
+ * stitched legacy atlases, both exported as PNGs under the legacy game dir and referenced through
  * private namespaces (see {@link LegacyGuiTextureResolver}). Render-thread only (GPU upload
  * happens in the {@link DynamicTexture} constructor); every miss is cooldown-cached and every
  * failure degrades to the painter's color fill. Universal across eras: the namespace and the
@@ -80,9 +81,26 @@ final class LegacyGuiTextureSupply {
 
     private static Path fileFor(Identifier id) {
         try {
-            Minecraft mc = Minecraft.getInstance();
-            if (mc == null || mc.gameDirectory == null) return null;
-            return mc.gameDirectory.toPath().resolve(id.getNamespace()).resolve(id.getPath());
+            // Both sides must agree byte-for-byte: the legacy side writes under its own
+            // umb.legacy.gameDir (the <game>/legacy/ subtree, same JVM, same property).
+            // Falling back to <host gameDir>/legacy keeps scratch layouts working.
+            String legacyGameDir = null;
+            try {
+                legacyGameDir = System.getProperty("umb.legacy.gameDir");
+            } catch (Throwable ignored) {
+                // Fall through to the game-directory fallback below.
+            }
+            Path base = null;
+            if (legacyGameDir != null && !legacyGameDir.isEmpty()) {
+                base = Paths.get(legacyGameDir);
+            } else {
+                Minecraft mc = Minecraft.getInstance();
+                if (mc != null && mc.gameDirectory != null) {
+                    base = mc.gameDirectory.toPath().resolve("legacy");
+                }
+            }
+            if (base == null) return null;
+            return base.resolve(id.getNamespace()).resolve(id.getPath());
         } catch (Throwable ignored) {
             return null;
         }

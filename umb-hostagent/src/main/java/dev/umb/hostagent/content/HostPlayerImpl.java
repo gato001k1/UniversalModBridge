@@ -35,7 +35,7 @@ final class HostPlayerImpl implements HostPlayer {
             // one host menu while it is already open; closing it returns containerMenu to the
             // normal inventory menu and permits the next request to open again.
             if (player.containerMenu instanceof UmbLegacyMenu) return;
-            String display = title == null || title.isEmpty() ? "Legacy GUI" : title;
+            String display = title == null ? "" : title; // the mod draws its own title; no generic label
             player.openMenu(new UmbMenuProvider(handle, Component.literal(display), null, x, y, z));
             AgentLog.line("[UMB-GUI] opened legacy container title=" + display);
         } catch (Throwable t) {
@@ -101,8 +101,6 @@ final class HostPlayerImpl implements HostPlayer {
     }
 
     /**
-     * mcheli-vehicles lane: look rotation for the legacy facade. 26.2 {@code getYRot}/{@code getXRot}
-     * (javap-verified on {@code net.minecraft.world.entity.Entity} against
      * research/jars/26.2/client.jar) carry the same degrees scale/orientation Mojang has always
      * used, which is exactly 1.7.10's rotationYaw/rotationPitch contract - identity mapping.
      */
@@ -125,7 +123,6 @@ final class HostPlayerImpl implements HostPlayer {
     }
 
     /**
-     * Automation lane (input-lane round 13 follow-up): the server-side selected hotbar
      * slot, so legacy code can read the selection instead of matching it by fallback.
      * -1 when unreadable (never a fabricated slot 0: -1 matches nothing, callers fall
      * back). Out of range (should not happen - vanilla clamps 0-8) is returned as-is,
@@ -177,7 +174,6 @@ final class HostPlayerImpl implements HostPlayer {
     @Override
     public void startUsingItem() {
         try {
-            // 26.2 javap-verified LivingEntity.startUsingItem(InteractionHand). The legacy
             // facade has exactly one held item, so its native counterpart is always MAIN_HAND.
             player.startUsingItem(net.minecraft.world.InteractionHand.MAIN_HAND);
         } catch (Throwable t) {
@@ -223,7 +219,6 @@ final class HostPlayerImpl implements HostPlayer {
                 // even though HBM's furnace (and most legacy containers) never touch the player's
                 // own inventory. getInventorySlot() already returns StackData.EMPTY for a native
                 // item with no legacy id (LegacyStackConv.toLegacy logs "no legacy id for native
-                // item ..." -- see research/out/legacy/win-m3/logs/hostagent.log:42-44 for the
                 // exact minecraft:oak_log/coal_block/iron_ore hits from the live M1 run), so an
                 // untouched slot holding an item with NO legacy representation at all comes back
                 // from the legacy side as "empty" too. Writing that EMPTY straight back here is
@@ -255,7 +250,6 @@ final class HostPlayerImpl implements HostPlayer {
         }
     }
 
-    // ---- TICK/CONTACT lane: motion + damage ----
 
     @Override
     public double getMotionX() {
@@ -287,7 +281,6 @@ final class HostPlayerImpl implements HostPlayer {
     /**
      * hurtMarked is what makes this REAL for a player: a ServerPlayer's motion is
      * client-authoritative, so a bare setDeltaMovement is invisible until the server sends the
-     * motion packet - hurtMarked=true (public field, javap-verified) is vanilla's own "send
      * ClientboundSetEntityMotionPacket next tick" flag (knockback uses the same mechanism).
      */
     @Override
@@ -317,7 +310,6 @@ final class HostPlayerImpl implements HostPlayer {
 
     /**
      * 1.7.10 DamageSource.damageType (field_76373_n) -&gt; a native 26.2 source. The vanilla names
-     * below are 1.7.10's own DamageSource statics; every 26.2 factory is javap-verified against
      * DamageSources. Anything else (mod-custom types like HBM's radiation, plus 1.7.10 types with
      * no no-arg 26.2 factory: explosion/anvil/fallingBlock/mob/player/arrow/thrown) is GENERIC -
      * the damage still lands, only the attribution text is lost; logged once per type so the

@@ -49,8 +49,16 @@ import dev.umb.legacy.api.UniverseConfig;
 import dev.umb.legacy.legacyside.gui.GuiButtonPacketDispatcher;
 
 /**
- * {@code dev.umb.bridge.api.LegacyBridge} - the single entry point THE BOUNDARY CONTRACT names .
- * Runs INSIDE the {@code LegacyLoader}, so it is the only class in this package that touches {@code dev.umb.bridge.api} AND owns the full FML lifecycle.
+ * {@code dev.umb.bridge.api.LegacyBridge} - the single entry point THE BOUNDARY CONTRACT names
+ * (DESIGN.md LANE A step 6). Runs INSIDE the {@code LegacyLoader}, so it is the only class in this
+ * package that touches {@code dev.umb.bridge.api} AND owns the full FML lifecycle.
+ *
+ * <p>{@link #boot} reuses {@link LegacyDriver} exactly as {@code Bootstrap.java}'s test harness
+ * does (same {@code UniverseConfig}, same transformer list) - single-shot, per DESIGN.md R4 and
+ * risk #8: a second {@code boot()} throws rather than half-working. The config's file paths are
+ * read from the SAME {@code -D} system properties {@code Bootstrap.java} uses, since both run in
+ * the same JVM and a real 26.2 embedding is expected to set them the same way before creating the
+ * universe-root loader.</p>
  */
 public final class LegacyBridgeImpl implements LegacyBridge {
 
@@ -87,7 +95,6 @@ public final class LegacyBridgeImpl implements LegacyBridge {
             }
         }
         this.umbWorld = UmbWorld.create(world, 0);
-        // E step 2/4: fire the one FML lifecycle event past POSTINIT that mods (correctly)
         // rely on for world-scoped static setup - see UmbMinecraftServer's javadoc for the exact
         // HBM call trace (RBMKDials.createDials) the step-3 mass-tick harness found missing this.
         // Never allowed to fail boot(): a genuine 26.2 embedding still gets M1's furnace scenario
@@ -198,13 +205,35 @@ public final class LegacyBridgeImpl implements LegacyBridge {
                         fml.onPlayerPostTick(player);
                     }
                 }
-                fml.onPostWorldTick(umbWorld);
-                fml.onPostServerTick();
+                // Each post-tick event runs on its own: a failing world-tick listener must not
+                // skip the server-tick listeners (and vice versa).
+                try {
+                    fml.onPostWorldTick(umbWorld);
+                } catch (Throwable t) {
+                    logTickFailureOnce(world, "END world", t);
+                }
+                try {
+                    fml.onPostServerTick();
+                } catch (Throwable t) {
+                    logTickFailureOnce(world, "END server", t);
+                }
             }
         } catch (Throwable t) {
-            world.log("LegacyBridgeImpl.tickEvents(" + (endPhase ? "END" : "START")
-                    + ") failed (non-fatal): " + t);
+            logTickFailureOnce(world, endPhase ? "END" : "START", t);
         }
+    }
+
+    private static final java.util.Set<String> TICK_FAILURES_LOGGED =
+            java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<String, Boolean>());
+
+    /** Logs a tick-event failure with its stack the first time each cause appears, then stays quiet. */
+    private static void logTickFailureOnce(HostWorld world, String phase, Throwable t) {
+        String key = phase + "|" + t.getClass().getName() + "|" + String.valueOf(t.getMessage());
+        if (!TICK_FAILURES_LOGGED.add(key)) return;
+        StringBuilder sb = new StringBuilder("LegacyBridgeImpl.tickEvents(" + phase + ") failed (non-fatal, logged once): " + t);
+        StackTraceElement[] st = t.getStackTrace();
+        for (int i = 0; i < Math.min(st.length, 14); i++) sb.append("\n    at ").append(st[i]);
+        world.log(sb.toString());
     }
 
     private void handoffOpenedGui(HostPlayer hostPlayer, UmbPlayer player) {
@@ -225,8 +254,27 @@ public final class LegacyBridgeImpl implements LegacyBridge {
         try {
             HostPlayer host = hostPlayerForName(playerName);
             UmbPlayer player = preparePlayer(host);
-            return player == null ? null : LegacyClientTickDispatcher.renderOverlay(
-                    player, umbWorld, partialTicks, width, height);
+            if (player == null) return null;
+            // draw code can send a client->server packet as a side effect (MCHeli's own
+            // MCH_PacketIndRotation/MCH_PacketIndNotifyAmmoNum, live-observed dropped
+            // "unresolved=sender" while riding). tickEvents() binds exactly this same
+            // player around LegacyClientTickDispatcher.tick() so captureClientToServer's sender
+            // resolves via the tested CURRENT_CLIENT_PLAYER path and any packet is QUEUED for
+            // delivery only after the authoritative server world/state is restored (see
+            // loopback-sender.md and LegacyNetworkLoopback's own javadoc on
+            // PENDING_CLIENT_TO_SERVER: a server handler sees the client facade's world -
+            // isRemote=true - for as long as this scope is open, and most legacy server handlers
+            // early-return on that). renderOverlay() never had this binding, so any packet a HUD
+            // handler sent from inside it fell back to the FACADE_CLIENT_PLAYER-only path and
+            // was delivered immediately, mid-capture, with the client facade still installed.
+            // Binding here mirrors tickEvents()'s proven pattern exactly.
+            LegacyNetworkLoopback.bindClientPlayer(player);
+            try {
+                return LegacyClientTickDispatcher.renderOverlay(
+                        player, umbWorld, partialTicks, width, height);
+            } finally {
+                LegacyNetworkLoopback.clearClientPlayer();
+            }
         } catch (Throwable t) {
             if (umbWorld != null) umbWorld.host().log("renderHud failed: " + t);
             return null;
@@ -276,9 +324,9 @@ public final class LegacyBridgeImpl implements LegacyBridge {
     }
 
     /**
- * Reconciles the complete host snapshot every server tick.
- * UmbWorld owns the actual cache and playerEntities list; this method only calls its package-private register/unregister hooks, preserving the 's single-facade-per-host-identity invariant
- */
+     * Reconciles the complete host snapshot every server tick. UmbWorld owns the actual cache and
+     * playerEntities list; this method only calls its package-private register/unregister hooks,
+     */
     @Override
     public void syncPlayers(List<HostPlayer> current) {
         ensureBooted();
@@ -355,7 +403,6 @@ public final class LegacyBridgeImpl implements LegacyBridge {
                     input.attackHeld, input.sneakHeld, input.usePressed, input.attackPressed,
                     input.heldSlot, input.yaw, input.pitch, input.lookX, input.lookY, input.lookZ,
                     held, pressed);
-            // Input- print inside the legacy universe, where plain stdout has
             // never been observed in any game log; route them through the proven host().log.
             dev.umb.legacy.legacyside.input.LegacyInputDiag.setSink(umbWorld.host()::log);
             return LegacyInputDispatcher.accept(record);
@@ -469,10 +516,9 @@ public final class LegacyBridgeImpl implements LegacyBridge {
         return booted;
     }
 
-    /**
- * Package-private: lets {@link TickCoverageProbe} reach the one {@code UmbWorld} this bridge built, without widening the public {@code LegacyBridge} contract.
- * Not part of {@code dev.umb.bridge.api}
- */
+    /** Package-private: lets {@link TickCoverageProbe} (same package, G2 lane E) reach the one
+     *  {@code UmbWorld} this bridge built, without widening the public {@code LegacyBridge}
+     *  contract. Not part of {@code dev.umb.bridge.api}. */
     UmbWorld debugWorld() {
         ensureBooted();
         return umbWorld;
@@ -512,7 +558,6 @@ public final class LegacyBridgeImpl implements LegacyBridge {
             int meta = umbWorld.func_72805_g(x, y, z);
             TileEntity te = resolveTileEntity(block, umbWorld, meta);
             if (te == null) {
-                // multiblock filler cells (BlockDummyable dummies, meta<6/12)
                 // NEVER get a tile, and the host retries every one of them; logging every miss
                 // spammed ~9x/sec in the live game. Cache the negative per (block, pos, meta)
                 // and log only the first miss - the null return (honest absence) is unchanged.
@@ -581,9 +626,13 @@ public final class LegacyBridgeImpl implements LegacyBridge {
     }
 
     /**
- * the contract's live collision query.
- * Resolves the block, asks its own {@code getCollisionBoundingBoxFromPool} (vanilla {@code Block} API every 1.7.10 block inherits - a null there is the honest "no live bounds", exactly like vanilla's own null-box...
- */
+     * {@code getCollisionBoundingBoxFromPool} (vanilla {@code Block} API every 1.7.10 block
+     * inherits - a null there is the honest "no live bounds", exactly like vanilla's own
+     * null-box handling), and converts the corners to block-local doubles. The host only
+     * calls this for sidecar-flagged state-following blocks on the server thread, but this
+     * side stays total anyway: unknown id, missing box, non-finite corners (a mod returning
+     * garbage) all come back null instead of throwing or poisoning anything.
+     */
     @Override
     public double[] collisionBounds(String legacyBlockId, int x, int y, int z) {
         List<double[]> boxes = collisionBoxes(legacyBlockId, x, y, z);
@@ -615,9 +664,12 @@ public final class LegacyBridgeImpl implements LegacyBridge {
     }
 
     /**
- * Calls the legacy block's own bounds callbacks for one position.
- * The order is .7.10 SRG runtime: func_149719_a (setBlockBoundsBasedOnState) first, then either func_149743_a (addCollisionBoxesToList) or func_149633_g (getSelectedBoundingBoxFromPool).
- */
+     * Calls the legacy block's own bounds callbacks for one position.  The order is grounded in
+     * the 1.7.10 SRG runtime: func_149719_a (setBlockBoundsBasedOnState) first, then either
+     * func_149743_a (addCollisionBoxesToList) or func_149633_g (getSelectedBoundingBoxFromPool).
+     * The multi-box callback is authoritative when it successfully returns an empty list; the
+     * single-box collision callback is used only when the multi-box method itself could not run.
+     */
     private List<double[]> liveShape(String legacyBlockId, int x, int y, int z, boolean selection) {
         ensureBooted();
         if (legacyBlockId == null) return null;
@@ -647,7 +699,7 @@ public final class LegacyBridgeImpl implements LegacyBridge {
                     aliasedCoreTile = true;
                 }
             }
-// Legacy compatibility behavior.
+            // SRG-grounded 1.7.10 order: setBlockBoundsBasedOnState first, then the
             // multi-box collision callback, with the single AABB as a compatibility fallback.
             try {
                 block.func_149719_a(umbWorld, x, y, z);
@@ -717,6 +769,29 @@ public final class LegacyBridgeImpl implements LegacyBridge {
                 if (previousTile == null) umbWorld.removeTileAt(x, y, z);
                 else umbWorld.putTile(x, y, z, previousTile);
             }
+        }
+    }
+
+    @Override
+    public boolean hasItemRenderer(String legacyItemId, int damage, String renderType) {
+        return dev.umb.legacy.legacyside.render.LegacyRenderCapture.hasItemRenderer(
+                legacyItemId, damage, renderType);
+    }
+
+    @Override
+    public dev.umb.bridge.api.EntityRenderCapture captureItem(String legacyItemId, int count,
+            int damage, byte[] nbt, String renderType, float partialTick, boolean transformOnly) {
+        return dev.umb.legacy.legacyside.render.LegacyRenderCapture.captureItem(
+                legacyItemId, count, damage, nbt, renderType, partialTick, transformOnly);
+    }
+
+    @Override
+    public List<double[]> cachedShape(String legacyBlockId, int x, int y, int z, boolean selection) {
+        if (legacyBlockId == null || umbWorld == null) return null;
+        ShapeKey key = new ShapeKey(legacyBlockId, x, y, z, umbWorld.func_72805_g(x, y, z), selection);
+        synchronized (shapeLock) {
+            List<double[]> cached = liveShapeCache.get(key);
+            return cached == null ? null : copyBoxes(cached);
         }
     }
 
@@ -1119,7 +1194,6 @@ public final class LegacyBridgeImpl implements LegacyBridge {
             Block block = GameData.getBlockRegistry().get(legacyBlockId);
             // 26.2 exposes no comparator-facing direction here. Use legacy side 0 (down), the
             // documented neutral convention for this one-way boundary rather than guessing from
-// Legacy compatibility behavior.
             // confirms func_149736_g(World,int,int,int,int).
             return block == null ? 0 : block.func_149736_g(umbWorld, x, y, z, 0);
         } catch (Throwable t) {
@@ -1128,7 +1202,6 @@ public final class LegacyBridgeImpl implements LegacyBridge {
         }
     }
 
-    // TICK/: block ticks + entity-inside
 
     /**
      * updateTick (func_149674_a, methods.csv: "Ticks the block if it's been scheduled") - the ONE
@@ -1158,9 +1231,16 @@ public final class LegacyBridgeImpl implements LegacyBridge {
     }
 
     /**
- * onEntityCollidedWithBlock (func_149670_a, methods.csv: "Triggered whenever an entity collides with this block (enters into the block).
- * Args: world, x, y, z, entity") - PLAYER-FIRST scope per the boundary contract's javadoc.
- */
+     * onEntityCollidedWithBlock (func_149670_a, methods.csv: "Triggered whenever an entity
+     * collides with this block (enters into the block). Args: world, x, y, z, entity") -
+     * PLAYER-FIRST scope per the boundary contract's javadoc. Deliberately NO
+     * pullInventory/pushInventory here: this dispatch runs every tick the player stands inside the
+     * block (20/s), and contact code acts on motion and damage, not the inventory - the 36-slot
+     * round-trip would be pure per-tick overhead (a contact handler that reads the held item still
+     * can: func_70694_bm converts on demand). Motion is seeded before and written back after,
+     * change-detected, so a conveyor's push crosses the boundary but an untouched motion never
+     * stomps the host's own physics.
+     */
     @Override
     public void entityInside(String legacyBlockId, int x, int y, int z, HostPlayer hostPlayer) {
         ensureBooted();
@@ -1278,7 +1358,6 @@ public final class LegacyBridgeImpl implements LegacyBridge {
             }
             if (!handled) {
                 // UNIVERSAL 1.7.10 rightClickMouse order (Minecraft.func_147121_ag,
-                // ): when the block path declines (activation + onItemUse)
                 // the SAME click still runs onItemRightClick (client PlayerControllerMP
                 // func_78769_a, server C08/-1/-1/-1/255 via func_73085_a). 26.2 sends only
                 // USE_ITEM_ON for a ground click and never synthesises the air half, so a
@@ -1343,9 +1422,10 @@ public final class LegacyBridgeImpl implements LegacyBridge {
     }
 
     /**
- * 1.7.10 {@code PlayerControllerMP.func_78769_a} (sendUseItem) return criterion, : consumed iff the call returned a different stack object, or the same stack with a changed count.
- * Damage is NOT consulted.
- */
+     * 1.7.10 {@code PlayerControllerMP.func_78769_a} (sendUseItem) return criterion,
+     * stack with a changed count. Damage is NOT consulted. A null return counts as consumed
+     * (it differs from the non-null stack passed in).
+     */
     public static boolean airUseConsumed(ItemStack before, int countBefore, ItemStack after) {
         return after != before || (after != null && after.field_77994_a != countBefore);
     }
@@ -1556,7 +1636,7 @@ public final class LegacyBridgeImpl implements LegacyBridge {
             return;
         }
         // TileHandleImpl.tick() already poisons-and-stops internally on the first throw
-        // this call must still never propagate to the caller
+        // (DESIGN.md risk #4); this call must still never propagate to the caller.
         try {
             t.tick();
         } catch (Throwable ignored) {

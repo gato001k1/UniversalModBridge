@@ -17,8 +17,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Tolerant reader for the render map produced by {@code dev.umb.rendermap.RenderMap}.
- * Only the fields needed for OBJ rendering are retained; unknown fields are skipped.
+ *
  * No net.minecraft imports, so it unit-tests off the game classpath.
  */
 public final class RenderMap {
@@ -69,16 +68,30 @@ public final class RenderMap {
     public record TeRow(String teClass, String rendererClass, List<Asset> models,
                         List<Asset> textures, List<String> groups, List<String> blockIds) { }
 
+    /**
+     * census tool COULD identify (it knows {@code className}) but could not statically resolve
+     * back to any specific field/renderer site (the field-tracing walk in {@code umb-rendermap}
+     * only follows static field references; an item constructed inside a loop over a data-driven
+     * config table - a common pattern for a mod with many similar item variants - has no single
+     * traceable field to trace at all). This carries strictly less information than an
+     * {@link ItemRow} (no {@code rendererClass}, no assets) - it is NOT a claim that the item has
+     * a custom renderer, only that the static census could not determine either way.
+     */
+    public record UnattributedItemRow(String id, String className) { }
+
     private final List<ItemRow> items;
     private final List<BlockRow> blocks;
     private final List<TeRow> tileEntities;
+    private final List<UnattributedItemRow> unattributedItems;
     private final Map<String, TeRow> teByBlockId;
     private final Map<String, TeRow> teByClass;
 
-    private RenderMap(List<ItemRow> items, List<BlockRow> blocks, List<TeRow> tes) {
+    private RenderMap(List<ItemRow> items, List<BlockRow> blocks, List<TeRow> tes,
+                      List<UnattributedItemRow> unattributedItems) {
         this.items = List.copyOf(items);
         this.blocks = List.copyOf(blocks);
         this.tileEntities = List.copyOf(tes);
+        this.unattributedItems = List.copyOf(unattributedItems);
         Map<String, TeRow> m = new HashMap<>();
         Map<String, TeRow> byClass = new HashMap<>();
         for (TeRow t : tes) {
@@ -92,6 +105,7 @@ public final class RenderMap {
     public List<ItemRow> items() { return items; }
     public List<BlockRow> blocks() { return blocks; }
     public List<TeRow> tileEntities() { return tileEntities; }
+    public List<UnattributedItemRow> unattributedItems() { return unattributedItems; }
 
     /** The TESR row that draws this block, if any - used to borrow a texture for blocks that list none. */
     public TeRow tileEntityFor(String blockId) { return teByBlockId.get(blockId); }
@@ -114,6 +128,7 @@ public final class RenderMap {
         List<ItemRow> items = new ArrayList<>();
         List<BlockRow> blocks = new ArrayList<>();
         List<TeRow> tes = new ArrayList<>();
+        List<UnattributedItemRow> unattributedItems = new ArrayList<>();
 
         for (JsonElement e : arr(root, "items")) {
             if (!e.isJsonObject()) continue;
@@ -139,7 +154,12 @@ public final class RenderMap {
                     str(o, "teClass"), str(o, "rendererClass"), assets(o, "models"),
                     assets(o, "textures"), strings(o, "groups"), strings(o, "blockIds")));
         }
-        return new RenderMap(items, blocks, tes);
+        for (JsonElement e : arr(root, "unattributedItemIds")) {
+            if (!e.isJsonObject()) continue;
+            JsonObject o = e.getAsJsonObject();
+            unattributedItems.add(new UnattributedItemRow(str(o, "id"), str(o, "className")));
+        }
+        return new RenderMap(items, blocks, tes, unattributedItems);
     }
 
     // ---------------------------------------------------------------- json helpers

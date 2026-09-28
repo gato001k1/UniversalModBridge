@@ -33,8 +33,10 @@ public final class HostAgent {
     // derives the namespace from explicit `ns=` or from the snapshot filename, failing fast
     // when neither exists. Every real flow (game, probes, tests) configures one of the two.
     private static volatile String namespace;
-    // An empty list means the caller did not provide mod jars. The universe decides whether that
-    // is valid; the agent must not assume a particular mod.
+    // GENERALITY fix (hostagent-purge #4/headline): no mod-jar default lives here at all - an
+    // empty list means "caller didn't say", and it is up to whoever boots the legacy universe
+    // (UmbUniverse) to decide what that means. HostAgent itself must not know about any specific
+    // mod's jar name.
     private static volatile List<Path> modJars = Collections.emptyList();
     private static volatile ModContentManifest contentManifest;
 
@@ -84,12 +86,19 @@ public final class HostAgent {
         if (lg != null && !lg.isEmpty()) {
             lang = Paths.get(lg);
         } else if (snapshot != null && snapshot.getParent() != null) {
-            // Asset directories are named from the configured namespace.
+            // GENERALITY fix (hostagent-purge #11, the sharper half): this used to hardcode the
+            // literal sibling folder name "hbm-assets" regardless of `namespace` - so even a
+            // fully-correct `ns=<newmod>` run silently resolved lang data from a nonexistent
+            // "hbm-assets" directory unless the caller ALSO remembered a separate `lang=`
+            // override. The assets sibling folder is always named after the namespace it holds
+            // (harness/legacy.ps1 extracts to "<ns>-assets"), so derive it the same way instead of
+            // hardcoding one mod's own folder name. Byte-identical to the old path when ns=hbm.
             lang = snapshot.getParent().resolve(namespace + "-assets/assets/" + namespace + "/lang/en_US.lang");
         }
 
-        // Optional shape and GUI profiles live beside the snapshot unless explicitly configured.
-        // Missing files fall back to the default cube and panel.
+        // convention as `lang` above. Both are OPTIONAL: a missing/absent file degrades to the
+        // pre-existing default cube shape / 176x166 dispenser-borrowed panel, never a hard failure
+        // (BlockShapeProfile.load / GuiProfile.load both tolerate a null or missing Path).
         String shapesArg = kv.get("blockshapes");
         if (shapesArg != null && !shapesArg.isEmpty()) {
             blockShapes = Paths.get(shapesArg);
@@ -118,30 +127,40 @@ public final class HostAgent {
             // order matters: the sprite clamp fix runs first and the paging patch receives its
             // output (Instrumentation chains transformers in registration order)
             inst.addTransformer(new CreativePagingPatcher());
-            // Extend the fluid model set after vanilla installs water and lava.
+            // FLUID-LANE: extend 26.2 FluidStateModelSet.bake after vanilla water/lava models.
             inst.addTransformer(new dev.umb.hostagent.content.fluid.FluidStateModelPatcher());
-            // Widen the menu construction interfaces used by generated adapters.
+            // R6: ACC_PUBLIC flips on MenuType.<init> / MenuType$MenuSupplier /
+            // MenuScreens$ScreenConstructor. Independent of the other three -- different classes.
             inst.addTransformer(new UmbAccessWidener());
             inst.addTransformer(new LegacyServerTickPatcher());
-            // Register payload codecs and listener/tick seams.
+            inst.addTransformer(new LegacyPlayerJoinPatcher());
+            // INPUT/EFFECTS: register the generic 26.2 payload codecs and listener/tick seams.
             inst.addTransformer(new LegacyPayloadCodecPatcher());
             inst.addTransformer(new LegacyCustomPayloadPatcher());
             inst.addTransformer(new LegacyClientTickPatcher());
             inst.addTransformer(new LegacyHudPatcher());
             inst.addTransformer(new LegacyCameraPatcher());
             inst.addTransformer(new LegacyAttackPatcher());
+            inst.addTransformer(new LegacyPickPatcher());
             inst.addTransformer(new UmbMenuPatcher());
             AgentLog.line("transformers installed");
-            // Start automation after transformer registration because it links game classes that
-            // must still pass through those transformers.
+            // Must start AFTER every addTransformer: AutomationControl links MinecraftServer and
+            // other game classes, and a class defined before its transformer is registered is
+            // never transformed (this silently disabled LegacyServerTickPatcher -> no FML
             dev.umb.hostagent.automation.AutomationControl.startIfConfigured(kv);
         } catch (Throwable t) {
             AgentLog.loud("PATCH-FAILED addTransformer: " + t);
             AgentLog.error("premain.addTransformer", t, 5);
         }
 
-        // Install a router over the default 1.7.10 universe. Other eras are booted lazily by
-        // namespace; with no era records the router simply forwards to the default bridge.
+        // G2 task 2 (R4): register the REAL bridge now -- this is cheap (no boot happens here,
+        // UmbUniverse.boot() is only ever invoked lazily by UmbBridgeHost.ensureBooted on first
+        // legacy need). Without this line UmbBridgeHost.get() stays null forever and every twin
+        // block is permanently inert, exactly like a failed boot -- just never attempted.
+        //
+        // 1.7.10 universe; manifest records carrying era != 1.7.10 register lazily-booted era
+        // universes keyed by their namespaces. No era field anywhere behaves byte-identically
+        // to the single-universe line above (BridgeRouter with no eras forwards everything).
         try {
             java.util.Map<String, Integer> installedEraMods = new java.util.LinkedHashMap<>();
             java.util.Map<String, java.util.Set<String>> eraNamespaces =
@@ -249,7 +268,7 @@ public final class HostAgent {
 
     /**
      * Derives the namespace from a snapshot path's {@code <namespace>-snapshot.json} filename
-     * Package-visible for tests.
+     * (the naming convention the whole harness already uses). Package-visible for tests.
      * Returns null when there is nothing to derive from - never a guessed mod id.
      */
     static String namespaceFromSnapshot(Path snapshotFile) {
@@ -265,8 +284,9 @@ public final class HostAgent {
      * The legacy mod jar(s) to stage into the boot, in caller-given order. Empty when nobody
      * passed {@code modjars=} (or called {@link #configure(Path, Path, String, List)}) -- an
      * empty list is a real, meaningful "not configured" signal, not an error; callers that need a
-     * default apply it themselves rather than silently selecting one mod. Multiple jars are
-     * preserved in caller order.
+     * default (today, exactly one: the test corpus's HBM jar) apply it themselves rather than
+     * HostAgent silently picking one mod's jar for everybody. Supports more than one jar so a
+     * future multi-mod boot can stage every jar the same way; nothing here assumes exactly one.
      */
     public static List<Path> modJars() {
         return modJars;

@@ -17,7 +17,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /** Resolves captured legacy texture identifiers from the manifest's extracted mod assets. */
-final class LegacyCaptureTextureResolver {
+public final class LegacyCaptureTextureResolver {
     private static final Set<Identifier> REGISTERED = ConcurrentHashMap.newKeySet();
     private static final Set<Identifier> REPORTED = ConcurrentHashMap.newKeySet();
     private static final Set<Identifier> MISSING_REPORTED = ConcurrentHashMap.newKeySet();
@@ -26,7 +26,7 @@ final class LegacyCaptureTextureResolver {
 
     private LegacyCaptureTextureResolver() { }
 
-    static void ensure(Identifier id) {
+    public static void ensure(Identifier id) {
         if (id == null || "minecraft".equals(id.getNamespace()) || REGISTERED.contains(id)) return;
         Path source = source(id);
         String sourceKey = source == null ? null : source.toAbsolutePath().normalize().toString();

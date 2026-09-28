@@ -5,6 +5,7 @@ import java.io.ByteArrayOutputStream;
 import java.lang.reflect.Method;
 import java.lang.reflect.Field;
 
+import dev.umb.bridge.api.EntityRenderCapture;
 import dev.umb.bridge.api.FieldPath;
 import dev.umb.bridge.api.TileFieldSnapshot;
 import dev.umb.bridge.api.TileHandle;
@@ -21,7 +22,6 @@ import net.minecraft.util.math.BlockPos;
  * 1.7.10's {@code TileHandleImpl} (poison-on-throw ticking, NBT as {@code byte[]} via
  * stream-based {@code CompressedStreamTools}, validity from the removed-flag).
  *
- * <p>SRG names grounded in-lane: tick = {@code ITickableTileEntity.func_73660_a} (number-stable
  * with 1.7.10), write = {@code func_189515_b(CompoundNBT)}, read =
  * {@code func_230337_a_(BlockState, CompoundNBT)}, removed = {@code func_145837_r} (stable),
  * NBT stream pair {@code func_74799_a/func_74796_a}.</p>
@@ -56,6 +56,24 @@ public final class TileHandle1165 implements TileHandle {
 
     BlockPos pos() {
         return pos;
+    }
+
+    /**
+     * Render-capture seam: same signature as {@code EntityHandle1165.renderCapture(float)}
+     * so {@code LegacyTileCaptureClient} can invoke it via reflection on any
+     * {@code TileHandle1165} instance.
+     *
+     * <p>Delegates to {@code LegacyTileRenderCapture1165Client} which holds the headless
+     * {@code TileEntityRendererDispatcher} populated during the lifecycle's
+     * {@code installEntityRenderers} stage.</p>
+     *
+     * @param partialTick fractional tick [0,1] forwarded to the renderer
+     * @return an {@code EntityRenderCapture} wrapping the recorded vertex draw calls, or an
+     *         empty capture with a diagnostic reason when no renderer is registered or the
+     *         dispatcher was not installed
+     */
+    public EntityRenderCapture renderCapture(float partialTick) {
+        return LegacyTileRenderCapture1165Client.capture(te, partialTick);
     }
 
     /** Vanilla World.setTileEntity binds the TE before it enters the world's tick list. */
@@ -223,7 +241,6 @@ public final class TileHandle1165 implements TileHandle {
 
     @Override
     public TileFieldSnapshot snapshotFields(FieldPath[] paths) {
-        // Gauges come later (umb-guimap lane); an honest empty snapshot keeps the contract
         // without fabricating values.
         int n = paths == null ? 0 : paths.length;
         return new TileFieldSnapshot(new String[n], new double[n], new boolean[n]);

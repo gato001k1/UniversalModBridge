@@ -701,6 +701,45 @@ public final class UmbUniverse implements LegacyBridge {
     }
 
     @Override
+    public boolean hasItemRenderer(String legacyItemId, int damage, String renderType) {
+        LegacyBridge r = real;
+        if (r == null) return false;
+        try {
+            return r.hasItemRenderer(legacyItemId, damage, renderType);
+        } catch (Throwable t) {
+            AgentLog.error("UmbUniverse.hasItemRenderer(" + legacyItemId + ")", t, 3);
+            return false;
+        }
+    }
+
+    @Override
+    public dev.umb.bridge.api.EntityRenderCapture captureItem(String legacyItemId, int count,
+            int damage, byte[] nbt, String renderType, float partialTick, boolean transformOnly) {
+        LegacyBridge r = real;
+        if (r == null) return null;
+        try {
+            return r.captureItem(legacyItemId, count, damage, nbt, renderType, partialTick,
+                    transformOnly);
+        } catch (Throwable t) {
+            AgentLog.error("UmbUniverse.captureItem(" + legacyItemId + ")", t, 3);
+            return null;
+        }
+    }
+
+    @Override
+    public java.util.List<double[]> cachedShape(String legacyBlockId, int x, int y, int z,
+            boolean selection) {
+        LegacyBridge r = real;
+        if (r == null) return null;
+        try {
+            return r.cachedShape(legacyBlockId, x, y, z, selection);
+        } catch (Throwable t) {
+            AgentLog.error("UmbUniverse.cachedShape", t, 3);
+            return null;
+        }
+    }
+
+    @Override
     public java.util.List<double[]> collisionBoxes(String legacyBlockId, int x, int y, int z) {
         LegacyBridge r = real;
         if (r == null) return null;

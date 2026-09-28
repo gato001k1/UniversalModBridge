@@ -22,6 +22,18 @@ import dev.umb.legacy1165.boot.Legacy1165Loader;
  */
 class M1165ProbeTest {
 
+    /** The client-dist pass is opt-in; these tests exercise it. */
+    private String previousDist;
+    @org.junit.jupiter.api.BeforeEach
+    void enableClientDist() {
+        previousDist = System.setProperty("umb.1165.dist", "CLIENT");
+    }
+    @org.junit.jupiter.api.AfterEach
+    void restoreDist() {
+        if (previousDist == null) System.clearProperty("umb.1165.dist");
+        else System.setProperty("umb.1165.dist", previousDist);
+    }
+
     @Test
     void liveUniverseVerticalIsOk() throws Exception {
         File repo = TestRepo.find();
@@ -48,6 +60,23 @@ class M1165ProbeTest {
             String result = String.valueOf(run.invoke(null));
             assertNotNull(result);
             assertTrue(result.startsWith("M1165-OK"), "M1165 vertical failed:\n" + result);
+            // With Dist=CLIENT the mod's own client-setup listener registers its TESR, so the
+            // dispatcher must resolve the real IronChestTileEntityRenderer for this tile -
+            // "no renderer" / "dispatcher unavailable" would mean registration itself failed.
+            // Actual vertex output is a separate, deeper claim this probe does not assert:
+            // the renderer needs a working texture-atlas subsystem this universe does not
+            // build - a documented residual gap, not a registration problem.
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile("tesrCapture: stateKey=(\\S+)")
+                    .matcher(result);
+            assertTrue(m.find(), "M1165 report has no tesrCapture line:\n" + result);
+            String stateKey = m.group(1);
+            // stateKey names the resolved renderer whether the render call succeeded
+            // ("1165-tesr:<class>") or later threw ("1165-tesr-threw:<class>:<cause>") - either
+            // form proves dispatch found the real renderer; only "renderer-missing" /
+            // "dispatcher-unavailable" would mean registration itself failed.
+            assertTrue(stateKey.contains("IronChestTileEntityRenderer"),
+                    "expected the real dispatcher to resolve IronChestTileEntityRenderer, got "
+                            + stateKey + ":\n" + result);
         }
     }
 }

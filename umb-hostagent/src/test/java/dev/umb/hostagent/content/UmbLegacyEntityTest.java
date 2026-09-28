@@ -154,32 +154,37 @@ class UmbLegacyEntityTest {
     }
 
     @Test
-    void compoundBoundsUnionsBaseWithExtraPartBoxes() {
+    void parentKeepsBaseBoxDespiteExtras() {
+        // Extras never union into the parent (a union swallows the aim ray for
+        // interior seats - the picker takes the nearest box). The parent keeps its base box;
+        // extras reconcile into UmbLegacyPartTwin children instead.
         FakeLegacyBridge.FakeEntityHandle handle =
                 new FakeLegacyBridge.FakeEntityHandle("umbtest:vehicle", 0, 0, 0);
         handle.boundingBox = new double[] { 0, 0, 0, 2, 1, 2 };
         handle.collisionBoxes = java.util.Collections.singletonList(
                 new double[] { 10, 0, 10, 26, 4, 12 });
 
-        AABB bounds = UmbLegacyEntity.compoundBoundsFor(handle);
+        UmbLegacyEntity twin = newEntity();
+        twin.setHandleForTest(handle);
+        twin.applyLegacyBounds(handle);
 
-        org.junit.jupiter.api.Assertions.assertNotNull(bounds);
+        AABB bounds = twin.getBoundingBox();
         org.junit.jupiter.api.Assertions.assertEquals(0, bounds.minX);
         org.junit.jupiter.api.Assertions.assertEquals(0, bounds.minY);
         org.junit.jupiter.api.Assertions.assertEquals(0, bounds.minZ);
-        org.junit.jupiter.api.Assertions.assertEquals(26, bounds.maxX);
-        org.junit.jupiter.api.Assertions.assertEquals(4, bounds.maxY);
-        org.junit.jupiter.api.Assertions.assertEquals(12, bounds.maxZ);
+        org.junit.jupiter.api.Assertions.assertEquals(2, bounds.maxX);
+        org.junit.jupiter.api.Assertions.assertEquals(1, bounds.maxY);
+        org.junit.jupiter.api.Assertions.assertEquals(2, bounds.maxZ);
     }
 
     @Test
-    void compoundBoundsFallsBackToBaseWithoutExtras() {
+    void parentKeepsBaseBoxWithoutExtras() {
         FakeLegacyBridge.FakeEntityHandle handle =
                 new FakeLegacyBridge.FakeEntityHandle("umbtest:vehicle", 0, 0, 0);
         handle.boundingBox = new double[] { 10.25, 20.5, 30.75, 12.5, 22.0, 34.0 };
         handle.collisionBoxes = null;
 
-        AABB bounds = UmbLegacyEntity.compoundBoundsFor(handle);
+        AABB bounds = UmbLegacyEntity.boundsFor(handle);
 
         org.junit.jupiter.api.Assertions.assertNotNull(bounds);
         org.junit.jupiter.api.Assertions.assertEquals(10.25, bounds.minX);
@@ -187,7 +192,7 @@ class UmbLegacyEntityTest {
     }
 
     @Test
-    void compoundBoundsIgnoresMalformedExtras() {
+    void malformedExtrasNeverReachTheParentBox() {
         FakeLegacyBridge.FakeEntityHandle handle =
                 new FakeLegacyBridge.FakeEntityHandle("umbtest:vehicle", 0, 0, 0);
         handle.boundingBox = new double[] { 0, 0, 0, 2, 1, 2 };
@@ -196,38 +201,82 @@ class UmbLegacyEntityTest {
                 new double[] { 5, 5, 5, 4, 4, 4 },
                 new double[] { 10, 0, 10, 26, 4, 12 });
 
-        AABB bounds = UmbLegacyEntity.compoundBoundsFor(handle);
+        UmbLegacyEntity twin = newEntity();
+        twin.setHandleForTest(handle);
+        twin.applyLegacyBounds(handle);
 
-        org.junit.jupiter.api.Assertions.assertNotNull(bounds);
-        org.junit.jupiter.api.Assertions.assertEquals(0, bounds.minX);
-        org.junit.jupiter.api.Assertions.assertEquals(26, bounds.maxX);
-        org.junit.jupiter.api.Assertions.assertEquals(4, bounds.maxY);
-        org.junit.jupiter.api.Assertions.assertEquals(12, bounds.maxZ);
+        AABB bounds = twin.getBoundingBox();
+        org.junit.jupiter.api.Assertions.assertEquals(2, bounds.maxX);
+        org.junit.jupiter.api.Assertions.assertEquals(1, bounds.maxY);
+        org.junit.jupiter.api.Assertions.assertEquals(2, bounds.maxZ);
     }
 
     @Test
-    void compoundBoundsFromExtrasOnlyWhenBaseAbsent() {
+    void absentBaseBoxStaysAbsent() {
         FakeLegacyBridge.FakeEntityHandle handle =
                 new FakeLegacyBridge.FakeEntityHandle("umbtest:vehicle", 0, 0, 0);
         handle.boundingBox = null;
         handle.collisionBoxes = java.util.Collections.singletonList(
                 new double[] { 10, 0, 10, 26, 4, 12 });
 
-        AABB bounds = UmbLegacyEntity.compoundBoundsFor(handle);
-
-        org.junit.jupiter.api.Assertions.assertNotNull(bounds);
-        org.junit.jupiter.api.Assertions.assertEquals(10, bounds.minX);
-        org.junit.jupiter.api.Assertions.assertEquals(26, bounds.maxX);
+        org.junit.jupiter.api.Assertions.assertNull(UmbLegacyEntity.boundsFor(handle));
     }
 
     @Test
-    void compoundBoundsIsNullWhenNothingUsable() {
+    void nullBaseBoxIsNull() {
         FakeLegacyBridge.FakeEntityHandle handle =
                 new FakeLegacyBridge.FakeEntityHandle("umbtest:vehicle", 0, 0, 0);
         handle.boundingBox = null;
         handle.collisionBoxes = null;
 
-        org.junit.jupiter.api.Assertions.assertNull(UmbLegacyEntity.compoundBoundsFor(handle));
+        org.junit.jupiter.api.Assertions.assertNull(UmbLegacyEntity.boundsFor(handle));
+    }
+
+    @Test
+    void clientBoxCodecRoundTrips() {
+        float[] encoded = UmbLegacyEntity.boxOffsets(
+                new double[] {-8.4, 91.1, -8.4, -6.6, 91.6, -6.6}, -7.5, 91.35, -7.5);
+
+        org.junit.jupiter.api.Assertions.assertNotNull(encoded);
+        org.junit.jupiter.api.Assertions.assertArrayEquals(
+                new float[] {-0.9F, -0.25F, -0.9F, 1.8F, 0.5F, 1.8F}, encoded, 0.001F);
+
+        double[] rebuilt = UmbLegacyEntity.rebuildBox(-7.5, 91.35, -7.5,
+                new org.joml.Vector3f(encoded[0], encoded[1], encoded[2]),
+                new org.joml.Vector3f(encoded[3], encoded[4], encoded[5]));
+
+        org.junit.jupiter.api.Assertions.assertNotNull(rebuilt);
+        org.junit.jupiter.api.Assertions.assertArrayEquals(
+                new double[] {-8.4, 91.1, -8.4, -6.6, 91.6, -6.6}, rebuilt, 0.01);
+    }
+
+    @Test
+    void clientBoxCodecRejectsGarbage() {
+        org.junit.jupiter.api.Assertions.assertNull(UmbLegacyEntity.boxOffsets(null, 0, 0, 0));
+        org.junit.jupiter.api.Assertions.assertNull(UmbLegacyEntity.boxOffsets(
+                new double[] {0, 0, 0, Double.NaN, 1, 1}, 0, 0, 0));
+        org.junit.jupiter.api.Assertions.assertNull(UmbLegacyEntity.boxOffsets(
+                new double[] {0, 0, 0, 0, 1, 1}, 0, 0, 0));
+        org.junit.jupiter.api.Assertions.assertNull(UmbLegacyEntity.rebuildBox(0, 0, 0, null,
+                new org.joml.Vector3f(1, 1, 1)));
+        org.junit.jupiter.api.Assertions.assertNull(UmbLegacyEntity.rebuildBox(0, 0, 0,
+                new org.joml.Vector3f(0, 0, 0), new org.joml.Vector3f(0, 0, 0)));
+    }
+
+    @Test
+    void partReconcileIsHeadlessSafeWithoutAServerLevel() {
+        // Unsafe-allocated twin has a null level: the server-only reconcile must no-op, never
+        // throw, and leave no children behind.
+        FakeLegacyBridge.FakeEntityHandle handle =
+                new FakeLegacyBridge.FakeEntityHandle("umbtest:vehicle", 0, 0, 0);
+        handle.collisionBoxes = java.util.Collections.singletonList(
+                new double[] { 10, 0, 10, 26, 4, 12 });
+
+        UmbLegacyEntity twin = newEntity();
+        twin.setHandleForTest(handle);
+        twin.syncPartTwins(handle);
+
+        org.junit.jupiter.api.Assertions.assertEquals(0, twin.partTwinCountForTest());
     }
 
     @Test

@@ -143,11 +143,9 @@ public class UmbLegacyBlock extends Block implements EntityBlock {
     }
 
     /**
-     * No-collision lane (LIVE-GAP-ANALYSIS.md section 4): {@code collisionShape} is
      * {@link BlockShapes#buildCollision}'s result - identical to {@code shape} for every group
      * that declares collision, but {@code Shapes.empty()} for the 276/1900 meta-groups whose
      * 1.7.10 {@code func_149668_a} returned null (fire, gases, spikes, charges, light beams).
-     * A null {@code collisionShape} falls back to the outline shape, keeping every pre-lane
      * caller (and the 2/3-arg constructors) byte-for-byte at the old one-shape behaviour.
      */
     public UmbLegacyBlock(BlockBehaviour.Properties properties, BlockRec record, VoxelShape shape,
@@ -185,9 +183,10 @@ public class UmbLegacyBlock extends Block implements EntityBlock {
         }
         try {
             UmbThread.assertServer();
-            if (!UmbBridgeHost.ensureBooted(new HostWorldImpl(level))) {
-                return defaultBlockState();
-            }
+            HostWorldImpl world = new HostWorldImpl(level);
+            if (!UmbBridgeHost.ensureBooted(world)) return null;
+            LegacyBridge bridge = UmbBridgeHost.get();
+            if (bridge instanceof BridgeRouter router && !router.readyForPlacement(legacyId)) return null;
             String key = Registrar.legacyVariantKeyForItem(context.getItemInHand().getItem());
             int initialMeta = 0;
             if (key != null) {
@@ -205,14 +204,16 @@ public class UmbLegacyBlock extends Block implements EntityBlock {
             float hitX = HitCoordsUtil.relative(context.getClickLocation().x, pos.getX());
             float hitY = HitCoordsUtil.relative(context.getClickLocation().y, pos.getY());
             float hitZ = HitCoordsUtil.relative(context.getClickLocation().z, pos.getZ());
-            int meta = UmbBridgeHost.get().placementMetadata(legacyId, pos.getX(), pos.getY(), pos.getZ(),
+            int meta = bridge.placementMetadata(legacyId, pos.getX(), pos.getY(), pos.getZ(),
                     side, hitX, hitY, hitZ, initialMeta);
             Block variant = Registrar.LEGACY_VARIANT_BLOCKS.get(legacyId + "@" + meta);
             if (variant == null) variant = Registrar.LEGACY_BLOCKS.get(legacyId);
             return variant == null ? defaultBlockState() : variant.defaultBlockState();
         } catch (Throwable t) {
             AgentLog.error("UmbLegacyBlock.getStateForPlacement", t, 4);
-            return defaultBlockState();
+            // A placement exception must not turn into a successful vanilla BlockItem placement;
+            // null is the 26.2 BlockItem contract for "do not place/do not shrink".
+            return null;
         }
     }
 
@@ -365,7 +366,15 @@ public class UmbLegacyBlock extends Block implements EntityBlock {
         return hasCollision && !collisionShape.isEmpty() ? Shapes.block() : Shapes.empty();
     }
 
-    /** Universal live legacy shape query. The bridge calls the mod's own callbacks for every twin. */
+    /**
+     * Universal live legacy shape query. The bridge calls the mod's own callbacks for every twin.
+     *
+     * <p>Only the server thread computes live shapes. The legacy side aliases multiblock tiles
+     * in its one shared World and the legacy block's own core lookup keeps state on the block
+     * instance, so a concurrent render-thread query corrupted server clicks and collision (doors
+     * refusing to open, wrong multiblock hitboxes). Every other caller reads the server's cached
+     * answer and keeps the static shape on a miss.
+     */
     private VoxelShape liveShape(BlockGetter level, BlockPos pos, boolean selection) {
         try {
             String id = getLegacyId();
@@ -376,9 +385,16 @@ public class UmbLegacyBlock extends Block implements EntityBlock {
             if (bridge == null) {
                 return null;
             }
-            java.util.List<double[]> boxes = selection
-                    ? bridge.selectionBoxes(id, pos.getX(), pos.getY(), pos.getZ())
-                    : bridge.collisionBoxes(id, pos.getX(), pos.getY(), pos.getZ());
+            boolean serverLevel = level instanceof Level runtimeLevel && !runtimeLevel.isClientSide();
+            java.util.List<double[]> boxes;
+            if (!serverLevel) {
+                // Client, render and meshing threads only read what the server computed.
+                boxes = bridge.cachedShape(id, pos.getX(), pos.getY(), pos.getZ(), selection);
+            } else if (selection) {
+                boxes = bridge.selectionBoxes(id, pos.getX(), pos.getY(), pos.getZ());
+            } else {
+                boxes = bridge.collisionBoxes(id, pos.getX(), pos.getY(), pos.getZ());
+            }
             if (boxes == null) {
                 return null;
             }
@@ -454,7 +470,6 @@ public class UmbLegacyBlock extends Block implements EntityBlock {
         return (BlockEntityTicker<T>) (BlockEntityTicker<UmbLegacyBlockEntity>) UmbLegacyBlockEntity::serverTick;
     }
 
-    // ---- TICK/CONTACT lane: block ticks + entity-inside ----
 
     /** Random ticks dropped because they arrived before the universe booted ({@link #randomTick}'s
      *  peek-only policy) - an honest counter instead of a silent loss; first drop logs once. */
@@ -532,7 +547,6 @@ public class UmbLegacyBlock extends Block implements EntityBlock {
      * entityInside -&gt; legacy onEntityCollidedWithBlock (func_149670_a, methods.csv: "Triggered
      * whenever an entity collides with this block (enters into the block)") - conveyors pushing,
      * gas/fire/spike blocks hurting. Fires every tick the entity's AABB overlaps this block, which
-     * is 1.7.10's own cadence for this hook; only reachable at all now that the no-collision lane
      * gives walk-through twins an empty collision shape. PLAYER-FIRST scope (the bridge has no
      * legacy facade for an arbitrary native entity): non-player contacts are counted and skipped
      * ({@link #NONPLAYER_CONTACTS_SKIPPED}). PEEK-only like {@link #randomTick}: standing inside a
@@ -667,7 +681,6 @@ public class UmbLegacyBlock extends Block implements EntityBlock {
      * is needed here at all: every Forge mod's multiblock machinery, whatever it is called, is
      * reached the same way because it is built on this one vanilla callback.
      *
-     * <p>{@code setPlacedBy} is javap-verified as the correct "placed by a living entity" hook: it
      * is declared on {@code Block} (not {@code BlockBehaviour}), its default body is a true no-op,
      * and {@code ServerPlayerGameMode}/{@code BlockItem}'s placement path calls it with the REAL
      * placing player after the block state is already written - matching 1.7.10's own
@@ -775,7 +788,6 @@ public class UmbLegacyBlock extends Block implements EntityBlock {
      * PART 1: bridges 1.7.10's onNeighborBlockChange (func_149695_a) - redstone-reactive machines,
      * pipes and anything that only reacts to a neighbor changing (not a direct click) stay inert
      * without this. {@code neighborChanged} is the closest 26.2 hook: same "one of my neighbors just
-     * changed, args are MY OWN position" contract as 1.7.10's version (javap-verified default body
      * is a true no-op).
      */
     @Override
@@ -828,7 +840,6 @@ public class UmbLegacyBlock extends Block implements EntityBlock {
 
     /**
      * PART 1: bridges 1.7.10's canPlaceBlockAt (func_149742_c). {@code canSurvive}'s default is
-     * {@code true} (javap-verified), matching 1.7.10's own default, so a bridge failure or an
      * unbooted universe degrades to "always placeable" rather than silently blocking every
      * placement.
      */
@@ -855,7 +866,6 @@ public class UmbLegacyBlock extends Block implements EntityBlock {
 
     /**
      * CRITICAL RISK (PART 1): "break must undo placement". {@code playerWillDestroy} is
-     * javap-verified as the ONLY pre-removal, player-driven hook that still sees the live block
      * state and its {@code BlockEntity} (disassembly of {@code ServerPlayerGameMode}'s destroy-block
      * method shows the block entity is fetched and {@code playerWillDestroy} is called BEFORE
      * {@code ServerLevel.removeBlock}; the SAME captured block-entity reference is reused afterwards
@@ -961,12 +971,10 @@ public class UmbLegacyBlock extends Block implements EntityBlock {
             // contract does not promise otherwise. This twin's own registered name IS
             // human-readable: Registrar already gave every twin a descriptionId of
             // "block.<namespace>.<path>" (Block.getName() == Component.translatable(descriptionId),
-            // javap-verified) and PackGen already emits a matching "block.<namespace>.<path>" lang
             // row from the snapshot's displayName (falling back to a humanized id) into the
             // generated resourcepack, so this resolves to "Bricked Furnace" client-side with no
             // contract change and no umb-legacy edit.
             Component title = this.getName();
-            // TILE-FIELD-SNAPSHOT lane: hand the opened GUI the SAME live TileHandle this block
             // entity already tracks at this exact position (see UmbLegacyBlockEntity#currentHandle)
             // - no new dev.umb.bridge.api lookup needed. null for a block with no tile entity at
             // all (record.hasTileEntity==false), which UmbMenuProvider/UmbLegacyMenu already treat

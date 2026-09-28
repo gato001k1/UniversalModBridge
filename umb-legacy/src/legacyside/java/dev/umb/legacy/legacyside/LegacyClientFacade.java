@@ -54,7 +54,16 @@ import dev.umb.legacy.legacyside.network.LegacyNetworkLoopback;
 
 /**
  * Minimal client view for client-only legacy code executed in the existing SERVER universe.
- * <p>This is option (b) from the client-universe design: one synthetic client facade is rebound around the already-authoritative legacy player/world for the duration of...
+ *
+ * <p>This is option (b) from the client-universe design: one synthetic client facade is rebound
+ * around the already-authoritative legacy player/world for the duration of a client handler tick.
+ * The objects are allocated without vanilla constructors because those constructors require a
+ * display, Netty connection, chunk source, and real client thread. Only the fields that client
+ * handlers use as identity/context are seeded. No renderer or GL path is entered.</p>
+ *
+ * fields field_71432_P, field_71439_g, field_71441_e, field_71474_y, field_71412_D;
+ * Entity.field_70154_o and field_70170_p; World.field_72995_K. This class intentionally has no
+ * mod identity or packet knowledge.</p>
  */
 public final class LegacyClientFacade {
     // Unsafe-allocated legacy Minecraft has no native window. Keep old client mods'
@@ -845,8 +854,43 @@ public final class LegacyClientFacade {
     }
 
     /**
- * Registers the real 1.7.10 item + block atlases in the shared facade TextureManager, stitched native-free exactly the way the vanilla client bootstraps them ({@code new TextureMap(1, "textures/items", true)} and {@code new TextureMap(0, "textures/blocks",...
- */
+     * A ReportedException's own stack ends at the wrapping catch site; the throwing
+     * frames live in the CrashReport text. Log the head of it (bounded, single line) so
+     * the next live stitch failure names the phase that actually threw.
+     */
+    private static void logAtlasCrashReport(String kind, Throwable failure) {
+        try {
+            if (!(failure instanceof net.minecraft.util.ReportedException)) return;
+            net.minecraft.crash.CrashReport report =
+                    ((net.minecraft.util.ReportedException) failure).func_71575_a();
+            if (report == null) return;
+            String text = report.func_71502_e();
+            if (text == null) return;
+            text = text.replace('\r', ' ').replace('\n', '|');
+            if (text.length() > 2000) text = text.substring(0, 2000) + "...[truncated]";
+            LegacyInputDiag.log("client atlas crash kind=" + kind + " report=" + text);
+        } catch (Throwable ignored) {
+            // Diagnostics must never break the stitch path.
+        }
+    }
+
+    /**
+     * Registers the real 1.7.10 item + block atlases in the shared facade TextureManager,
+     * stitched native-free exactly the way the vanilla client bootstraps them
+     * ({@code new TextureMap(1, "textures/items", true)} and
+     * {@code new TextureMap(0, "textures/blocks", true)} loaded through
+     * and {@code Minecraft.func_71357_a}). Vanilla's own stitch driver
+     * ({@code TextureMap.loadTextureAtlas} -> private {@code func_110573_f}) walks the
+     * block/item registries (items self-select their atlas by sprite number) and fires the
+     * Forge stitch events, so mod icons register through the exact generic mechanism as
+     * vanilla's; nothing here names a mod, block, or item.
+     *
+     * <p>Success is detected by state ({@code getTexture} returning the TextureMap), never
+     * by a flag, so a poisoned entry (vanilla puts its missing texture on load failure) is
+     * overwritten by the next attempt. Attempts back off (30 s) because a full stitch
+     * iterates every registered block/item and reads its PNG: a persistently failing
+     * stitch must not run every tick.</p>
+     */
     private static void ensureItemBlockAtlases(TextureManager textures,
             IResourceManager resources) {
         if (textures == null || resources == null) return;
@@ -878,6 +922,7 @@ public final class LegacyClientFacade {
                             + atlasFailed.getClass().getName() + ":"
                             + String.valueOf(atlasFailed.getMessage())
                             + " stack=" + shortStack(atlasFailed));
+                            logAtlasCrashReport("items", atlasFailed);
                 }
             }
             try {
@@ -889,6 +934,7 @@ public final class LegacyClientFacade {
                             + atlasFailed.getClass().getName() + ":"
                             + String.valueOf(atlasFailed.getMessage())
                             + " stack=" + shortStack(atlasFailed));
+                            logAtlasCrashReport("blocks", atlasFailed);
                 }
             }
             if (items) {
@@ -973,46 +1019,113 @@ public final class LegacyClientFacade {
      */
     private static void exportVanillaGuiArt() {
         if (VANILLA_GUI_EXPORTED) return;
-        VANILLA_GUI_EXPORTED = true;
         String gameDir = null;
         try { gameDir = System.getProperty("umb.legacy.gameDir"); }
         catch (Throwable ignored) { }
-        if (gameDir == null || gameDir.isEmpty()) return;
         ClassLoader loader = null;
         try { loader = Minecraft.class.getClassLoader(); }
         catch (Throwable ignored) { }
-        if (loader == null) return;
+        if (gameDir == null || gameDir.isEmpty() || loader == null) {
+            if (LegacyInputDiag.oncePer("client-vanilla-export-nogamedir", 0)) {
+                LegacyInputDiag.log("client vanilla gui export disabled: no gameDir/loader");
+            }
+            return;
+        }
+        VANILLA_GUI_EXPORTED = true;
+        if (LegacyInputDiag.oncePer("client-vanilla-export-start", 0)) {
+            LegacyInputDiag.log("client vanilla 1710 gui art export starting");
+        }
+        java.util.zip.ZipFile vanillaJar = openVanillaClientJar();
         int copied = 0;
-        for (String name : VANILLA_GUI_ART) {
-            try {
-                java.io.File dst =
-                        new java.io.File(gameDir, "umbvanilla1710/textures/gui/" + name);
-                if (dst.isFile() && dst.length() > 0) continue;
-                java.io.InputStream in = loader.getResourceAsStream(
-                        "assets/minecraft/textures/gui/" + name);
-                if (in == null) continue;
+        int copiedJar = 0;
+        try {
+            for (String name : VANILLA_GUI_ART) {
                 try {
-                    java.io.File parent = dst.getParentFile();
-                    if (parent != null) parent.mkdirs();
-                    java.io.OutputStream out = new java.io.FileOutputStream(dst);
+                    java.io.File dst =
+                            new java.io.File(gameDir, "umbvanilla1710/textures/gui/" + name);
+                    if (dst.isFile() && dst.length() > 0) continue;
+                    java.io.InputStream in = null;
+                    boolean fromJar = false;
+                    if (vanillaJar != null) {
+                        try {
+                            java.util.zip.ZipEntry entry = vanillaJar.getEntry(
+                                    "assets/minecraft/textures/gui/" + name);
+                            if (entry != null) in = vanillaJar.getInputStream(entry);
+                            fromJar = in != null;
+                        } catch (Throwable ignored) { }
+                    }
+                    if (in == null) {
+                        try {
+                            in = loader.getResourceAsStream(
+                                    "assets/minecraft/textures/gui/" + name);
+                        } catch (Throwable ignored) { }
+                    }
+                    if (in == null) {
+                        if (LegacyInputDiag.oncePer("client-vanilla-missing:" + name, 0)) {
+                            LegacyInputDiag.log("client vanilla gui missing file=" + name);
+                        }
+                        continue;
+                    }
                     try {
-                        byte[] buf = new byte[8192];
-                        int n;
-                        while ((n = in.read(buf)) >= 0) out.write(buf, 0, n);
-                    } finally { out.close(); }
-                    copied++;
-                } finally { in.close(); }
-            } catch (Throwable oneFailed) {
-                if (LegacyInputDiag.oncePer("client-vanilla-export:" + name,
-                        60_000_000_000L)) {
-                    LegacyInputDiag.log("client vanilla gui export failed file=" + name
-                            + " cause=" + oneFailed.getClass().getName());
+                        java.io.File parent = dst.getParentFile();
+                        if (parent != null) parent.mkdirs();
+                        java.io.OutputStream out = new java.io.FileOutputStream(dst);
+                        try {
+                            byte[] buf = new byte[8192];
+                            int n;
+                            while ((n = in.read(buf)) >= 0) out.write(buf, 0, n);
+                        } finally { out.close(); }
+                        copied++;
+                        if (fromJar) copiedJar++;
+                    } finally { in.close(); }
+                } catch (Throwable oneFailed) {
+                    if (LegacyInputDiag.oncePer("client-vanilla-export:" + name,
+                            60_000_000_000L)) {
+                        LegacyInputDiag.log("client vanilla gui export failed file=" + name
+                                + " cause=" + oneFailed.getClass().getName());
+                    }
                 }
+            }
+        } finally {
+            if (vanillaJar != null) {
+                try { vanillaJar.close(); } catch (Throwable ignored) { }
             }
         }
         if (LegacyInputDiag.oncePer("client-vanilla-exported", 0)) {
-            LegacyInputDiag.log("client vanilla 1710 gui art exported files=" + copied);
+            LegacyInputDiag.log("client vanilla 1710 gui art exported files=" + copied
+                    + " fromJar=" + copiedJar);
         }
+    }
+
+    /**
+     * Locates the vanilla 1.7.10 client jar (same candidate layout the resource pack
+     * uses): its GUI art is authoritative, while the classloader may serve a newer
+     * vanilla's same-named files (or nothing at all). Null when absent.
+     */
+    private static java.util.zip.ZipFile openVanillaClientJar() {
+        try {
+            String repo = "";
+            try { repo = System.getProperty("umb.repo", ""); } catch (Throwable ignored) { }
+            String userDir = "";
+            try { userDir = System.getProperty("user.dir", ""); } catch (Throwable ignored) { }
+            java.util.ArrayList<java.io.File> candidates =
+                    new java.util.ArrayList<java.io.File>();
+            if (!repo.isEmpty()) {
+                candidates.add(new java.io.File(new java.io.File(repo),
+                        "research/jars/1.7.10/client.jar"));
+            }
+            if (!userDir.isEmpty()) {
+                candidates.add(new java.io.File(new java.io.File(userDir),
+                        "research/jars/1.7.10/client.jar"));
+            }
+            candidates.add(new java.io.File("research/jars/1.7.10/client.jar"));
+            for (java.io.File candidate : candidates) {
+                try {
+                    if (candidate.isFile()) return new java.util.zip.ZipFile(candidate);
+                } catch (Throwable ignored) { }
+            }
+        } catch (Throwable ignored) { }
+        return null;
     }
 
     /**
@@ -1039,7 +1152,6 @@ public final class LegacyClientFacade {
             if (!(raw instanceof java.util.Map)) return;
             java.util.Map<?, ?> sprites = (java.util.Map<?, ?>) raw;
             // Atlas dimensions live on the Stitcher, not the map - and the stitcher
-            // power-of-two pads . Rebuild
             // the exact padded size from sprite extents so fractional UVs keep sampling
             // the right cells; abort honestly when any sprite hides its geometry.
             int w = 0;
@@ -1271,8 +1383,13 @@ public final class LegacyClientFacade {
     private static volatile boolean THIRD_PERSON_DISTANCE_LOOKUP_DONE;
 
     /**
- * Reads the third-person camera distance legacy client code wrote into the facade's own EntityRenderer (1.7.10 {@code field_78490_B}/{@code thirdPersonDistance}, against the 1.7.10 SRG runtime and against the mod wrapper that writes exactly that field...
- */
+     * Reads the third-person camera distance legacy client code wrote into the facade's own
+     * against the 1.7.10 SRG runtime and against the mod wrapper that writes exactly that field
+     * through the Minecraft facade).  The desired value (B) is read rather than the smoothed one
+     * ({@code field_78491_C}): the headless facade never runs the renderer, so nothing copies B
+     * into C here, while B always holds the mod's latest write.  NaN on any failure - an honest
+     * absence the host answers by keeping its own distance.  Never names a mod or handler.
+     */
     public static float thirdPersonDistance(Minecraft minecraft) {
         if (minecraft == null) {
             return Float.NaN;
@@ -1332,8 +1449,12 @@ public final class LegacyClientFacade {
     }
 
     /**
- * In 1.7.10 single-player the integrated server shares the JVM with the client, and mods call FMLClientHandler.instance().getClient() from SERVER-side entity ticks (: MCH_EntityHeli.onUpdate spawns rotor particles through getClient().effectRenderer and was...
- */
+     * In 1.7.10 single-player the integrated server shares the JVM with the client, and mods call
+     * MCH_EntityHeli.onUpdate spawns rotor particles through getClient().effectRenderer and was
+     * poisoned with an NPE the moment the throttle rose). Our Forge boots as a server, so
+     * FMLClientHandler.client stays null. Bind it once to the facade Minecraft, whose
+     * effectRenderer and other client services are already seeded; never overwrite a real one.
+     */
     private static void bindFmlClientHandler(Minecraft minecraft) {
         try {
             cpw.mods.fml.client.FMLClientHandler handler = cpw.mods.fml.client.FMLClientHandler.instance();
@@ -1420,9 +1541,20 @@ public final class LegacyClientFacade {
     }
 
     /**
- * Seeds the renderer-owned services the vanilla EntityRenderer constructor creates, using the same native-free building blocks as the facade's font/texture services.
- * <p>Client tick handlers touch these every tick through the static singleton : {@code...
- */
+     * Seeds the renderer-owned services the vanilla EntityRenderer constructor creates,
+     * using the same native-free building blocks as the facade's font/texture services.
+     *
+     * <p>Client tick handlers touch these every tick through the static singleton
+     * {@code field_78516_c} (itemRenderer) is read by the wrappers that null
+     * {@code field_78453_b} (itemToRender) and write {@code field_78454_c}
+     * (equippedProgress) while riding, and {@code field_147709_v} (theMapItemRenderer)
+     * backs the public {@code func_147701_i} accessor. A null instance makes Forge's
+     * reflection helper throw NPE, which can abort the rest of the mod's tick logic.
+     * The remaining roller/fov/distance members ({@code field_78490_B},
+     * {@code field_78495_O}, {@code field_78505_P}, {@code field_78503_V}) are primitives
+     * and need no seeding. ItemRenderer's real constructor is native-free (a RenderBlocks
+     * plus the mc reference); MapItemRenderer's only stores its TextureManager.</p>
+     */
     private static void seedRendererServices(Object renderer, Minecraft minecraft) {
         if (renderer == null || minecraft == null) return;
         try {

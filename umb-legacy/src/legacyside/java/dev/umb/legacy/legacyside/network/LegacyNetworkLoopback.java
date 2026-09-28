@@ -381,8 +381,13 @@ public final class LegacyNetworkLoopback {
     private static void dropUnresolved(IMessage message, String reason) {
         if (message != null && LegacyInputDiag.oncePer("client-c2s-drop:"
                 + message.getClass().getName() + ":" + reason, 60_000_000_000L)) {
+            // Thread and binding state included so a future drop from an uncovered call
+            // path is diagnosable from one log line.
             LegacyInputDiag.log("client->server dropped unresolved=" + reason
-                    + " message=" + message.getClass().getName());
+                    + " message=" + message.getClass().getName()
+                    + " thread=" + Thread.currentThread().getName()
+                    + " currentClientPlayer=" + (CURRENT_CLIENT_PLAYER.get() != null)
+                    + " facadeClientPlayer=" + (FACADE_CLIENT_PLAYER.get() != null));
         }
     }
 

@@ -23,6 +23,7 @@ import net.minecraft.tileentity.TileEntity;
  * No mod class or namespace is inspected.</p>
  */
 final class LegacyClientTilePresenter {
+    private static String lastStatus = "";
     private static final int MAX_TILES_PER_TICK = 256;
     private static final double MAX_DISTANCE_SQUARED = 64.0D * 64.0D;
     /** Constructor and primitive-field metadata are stable per legacy tile class. */
@@ -75,7 +76,10 @@ final class LegacyClientTilePresenter {
                         + " message=" + String.valueOf(t.getMessage()));
             }
         }
-        if (considered > 0) {
+        // Per-tick status, logged only when it changes (was every tick).
+        String status = considered + "/" + ticked + "/" + failed;
+        if (considered > 0 && !status.equals(lastStatus)) {
+            lastStatus = status;
             serverWorld.host().log("UMB-FX clientTiles considered=" + considered + " ticked=" + ticked
                     + " failed=" + failed + " max=" + MAX_TILES_PER_TICK);
         }
@@ -100,9 +104,12 @@ final class LegacyClientTilePresenter {
      * those helpers null and makes an otherwise harmless client presentation tick throw before
      * it can emit smoke or sound.  Prefer the tile's normal no-argument constructor so its own
      * invariants are established; retain the allocation fallback for unusual legacy tiles whose
-     * constructor cannot run in the isolated facade.
+     * constructor cannot run in the isolated facade.  Shared with
+     * {@link UmbClientWorld} so persistent client twins get the same invariants (a twin whose
+     * helpers were never constructed can never be healed by later NBT syncs: readers that size
+     * state from those helpers throw before assigning anything).
      */
-    private static TileEntity construct(TileEntity source) throws Exception {
+    static TileEntity construct(TileEntity source) throws Exception {
         Class<?> tileClass = source.getClass();
         Constructor<?> ctor = CONSTRUCTORS.get(tileClass);
         if (ctor == null && !NO_CONSTRUCTOR.contains(tileClass)) {

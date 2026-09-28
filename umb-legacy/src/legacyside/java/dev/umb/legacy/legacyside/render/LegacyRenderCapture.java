@@ -277,6 +277,55 @@ public final class LegacyRenderCapture {
     }
 
     /**
+     * item have a real, registered {@code IItemRenderer} for this render type at all, without
+     * running it. This is what {@code HeldItemModel} (objbridge) must gate on: the host cannot
+     * know statically which items have a custom renderer (a static per-mod sidecar necessarily
+     * only covers what a build-time census could resolve; MCHeli's own hand-coded Java model
+     * renderers, for one concrete example, have zero recoverable OBJ geometry and were never in
+     * any such sidecar, yet are exactly the kind of renderer this whole capture path exists to
+     * replay). No cache/GL-EMU session is touched; this is a plain registry lookup.
+     */
+    public static boolean hasItemRenderer(String legacyId, int damage, String renderTypeName) {
+        if (legacyId == null || renderTypeName == null) return false;
+        try {
+            IItemRenderer.ItemRenderType renderType = IItemRenderer.ItemRenderType.valueOf(renderTypeName);
+            net.minecraft.item.ItemStack stack = UmbItemConv.toLegacy(
+                    new dev.umb.bridge.api.StackData(legacyId, 1, damage, null));
+            if (stack == null) {
+                logRendererCheckOnce(legacyId, renderTypeName, "stack-null");
+                return false;
+            }
+            IItemRenderer renderer = MinecraftForgeClient.getItemRenderer(stack, renderType);
+            boolean handled = renderer != null && renderer.handleRenderType(stack, renderType);
+            logRendererCheckOnce(legacyId, renderTypeName, renderer == null ? "no-renderer"
+                    : renderer.getClass().getName() + " handled=" + handled);
+            return handled;
+        } catch (Throwable t) {
+            logRendererCheckOnce(legacyId, renderTypeName, "threw " + t);
+            return false;
+        }
+    }
+
+    private static net.minecraft.client.renderer.RenderBlocks itemRenderBlocks;
+
+    /** One shared RenderBlocks for item renderers, like vanilla ItemRenderer keeps its own. */
+    private static net.minecraft.client.renderer.RenderBlocks itemRenderBlocks() {
+        if (itemRenderBlocks == null) itemRenderBlocks = new net.minecraft.client.renderer.RenderBlocks();
+        return itemRenderBlocks;
+    }
+
+    private static final java.util.Set<String> RENDERER_CHECK_LOGGED =
+            java.util.Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<String, Boolean>());
+
+    /** One line per item id + render type, so a held item that stays flat shows why. */
+    private static void logRendererCheckOnce(String legacyId, String renderTypeName, String outcome) {
+        if (RENDERER_CHECK_LOGGED.add(legacyId + "|" + renderTypeName)) {
+            System.out.println("[UMB-LEGACY] item renderer check id=" + legacyId + " type="
+                    + renderTypeName + " -> " + outcome);
+        }
+    }
+
+    /**
      * Runs the registered Forge IItemRenderer through this same GL/Tessellator capture boundary.
      * The cache key is exactly legacy item id + damage + ItemRenderType; transform-only callers
      * reuse the sealed mesh and re-enter the renderer for current matrices/cull state. No native
@@ -306,13 +355,16 @@ public final class LegacyRenderCapture {
                 c.enable(GL_CULL_FACE);
                 ACTIVE.set(c);
                 ACTIVE_MINECRAFT.set(binding.minecraft);
+                // Forge 1.7.10 passes a RenderBlocks first: ENTITY (rb, EntityItem), EQUIPPED and
+                // EQUIPPED_FIRST_PERSON (rb, holder), INVENTORY (rb). Renderers index into this.
+                net.minecraft.client.renderer.RenderBlocks renderBlocks = itemRenderBlocks();
                 Object[] args;
                 if (renderType == IItemRenderer.ItemRenderType.ENTITY)
-                    args = new Object[] {new EntityItem(binding.world, 0.0D, 0.0D, 0.0D, stack)};
+                    args = new Object[] {renderBlocks, new EntityItem(binding.world, 0.0D, 0.0D, 0.0D, stack)};
                 else if (renderType == IItemRenderer.ItemRenderType.INVENTORY)
-                    args = new Object[0];
+                    args = new Object[] {renderBlocks};
                 else
-                    args = new Object[] {binding.player};
+                    args = new Object[] {renderBlocks, binding.player};
                 renderer.renderItem(renderType, stack, args);
                 c.finish();
                 return c.result();
@@ -924,6 +976,13 @@ public final class LegacyRenderCapture {
     public static void color(float r, float g, float b, float a) { Capture c = ACTIVE.get(); if (c != null) c.color(r,g,b,a); }
     public static void draw() { Capture c = ACTIVE.get(); if (c != null) c.draw(); }
 
+    /** Tessellator int colour setters (0-255, clamped like vanilla) onto the float path. */
+    private static void colorInt(int r, int g, int b, int a) {
+        color(clamp255(r) / 255.0F, clamp255(g) / 255.0F, clamp255(b) / 255.0F, clamp255(a) / 255.0F);
+    }
+
+    private static int clamp255(int v) { return v < 0 ? 0 : (v > 255 ? 255 : v); }
+
     // Tessellator call-site shims include the receiver because the legacy runtime's own
     // Tessellator class wins classpath resolution over our headless ABI shadow.
     public static int func_78381_a(net.minecraft.client.renderer.Tessellator ignored) { draw(); return 0; }
@@ -933,17 +992,17 @@ public final class LegacyRenderCapture {
     public static void func_78380_c(net.minecraft.client.renderer.Tessellator ignored, int value) {}
     public static void func_78386_a(net.minecraft.client.renderer.Tessellator ignored, float r, float g, float b) { color(r,g,b,1); }
     public static void func_78369_a(net.minecraft.client.renderer.Tessellator ignored, float r, float g, float b, float a) { color(r,g,b,a); }
-    public static void func_78376_a(net.minecraft.client.renderer.Tessellator ignored, int x, int y, int z) {}
-    public static void func_78370_a(net.minecraft.client.renderer.Tessellator ignored, int r, int g, int b, int a) {}
-    public static void func_154352_a(net.minecraft.client.renderer.Tessellator ignored, byte x, byte y, byte z) {}
-    public static void func_78374_a(net.minecraft.client.renderer.Tessellator ignored, double x, double y, double z, double u, double v) { vertex(x,y,z,u,v); }
-    public static void func_78377_a(net.minecraft.client.renderer.Tessellator ignored, double x, double y, double z) { vertex(x,y,z); }
-    public static void func_78378_d(net.minecraft.client.renderer.Tessellator ignored, int value) {}
-    public static void func_78384_a(net.minecraft.client.renderer.Tessellator ignored, int x, int y) {}
+    public static void func_78376_a(net.minecraft.client.renderer.Tessellator ignored, int r, int g, int b) { colorInt(r, g, b, 255); }
+    public static void func_78370_a(net.minecraft.client.renderer.Tessellator ignored, int r, int g, int b, int a) { colorInt(r, g, b, a); }
+    public static void func_154352_a(net.minecraft.client.renderer.Tessellator ignored, byte r, byte g, byte b) { colorInt(r & 255, g & 255, b & 255, 255); }
+    public static void func_78374_a(net.minecraft.client.renderer.Tessellator ignored, double x, double y, double z, double u, double v) { Capture c = ACTIVE.get(); if (c != null) vertex(x + c.tessX, y + c.tessY, z + c.tessZ, u, v); }
+    public static void func_78377_a(net.minecraft.client.renderer.Tessellator ignored, double x, double y, double z) { Capture c = ACTIVE.get(); if (c != null) vertex(x + c.tessX, y + c.tessY, z + c.tessZ); }
+    public static void func_78378_d(net.minecraft.client.renderer.Tessellator ignored, int rgb) { colorInt((rgb >> 16) & 255, (rgb >> 8) & 255, rgb & 255, 255); }
+    public static void func_78384_a(net.minecraft.client.renderer.Tessellator ignored, int rgb, int alpha) { colorInt((rgb >> 16) & 255, (rgb >> 8) & 255, rgb & 255, alpha); }
     public static void func_78383_c(net.minecraft.client.renderer.Tessellator ignored) {}
     public static void func_78375_b(net.minecraft.client.renderer.Tessellator ignored, float x, float y, float z) { normal(x,y,z); }
-    public static void func_78373_b(net.minecraft.client.renderer.Tessellator ignored, double x, double y, double z) { vertex(x,y,z); }
-    public static void func_78372_c(net.minecraft.client.renderer.Tessellator ignored, float x, float y, float z) {}
+    public static void func_78373_b(net.minecraft.client.renderer.Tessellator ignored, double x, double y, double z) { Capture c = ACTIVE.get(); if (c != null) { c.tessX = x; c.tessY = y; c.tessZ = z; } }
+    public static void func_78372_c(net.minecraft.client.renderer.Tessellator ignored, float x, float y, float z) { Capture c = ACTIVE.get(); if (c != null) { c.tessX += x; c.tessY += y; c.tessZ += z; } }
 
     /** TextureManager.bindTexture prefix: records the bind and skips loading while capturing. */
     public static boolean captureBindTexture(ResourceLocation location) {
@@ -1087,6 +1146,14 @@ public final class LegacyRenderCapture {
                 bindFacadeRenderServices(binding);
                 System.out.println("[UMB-LEGACY] client resource universe ready side=client fmlSide="
                         + cpw.mods.fml.common.FMLCommonHandler.instance().getSide().name());
+                // (load-phase ticks, same method, same isolation, same flag) instead of
+                // on first capture, where its one-shot classloading/model parsing froze
+                // the render thread ~4s on the user's first placement. Gated on staged
+                // mods: an empty mod list means boot hasn't staged anything yet, and
+                // marking ready then would permanently skip real registrations.
+                if (!clientRegistered && !cpw.mods.fml.common.Loader.instance().getModList().isEmpty()) {
+                    ensureClientVisuals(binding);
+                }
             } catch (Throwable failure) {
                 // Client registration is additive. A broken client-only hook must never abort
                 // the host tick; discoverClientProxies already isolates individual hooks.
@@ -1424,7 +1491,6 @@ public final class LegacyRenderCapture {
     }
 
     /**
-     * One-shot classloader proof for the two values that model loaders actually consult. This is
      * intentionally reflection-only and generic: it reports the class identity, defining loader,
      * raw singleton, accessor result, and field_110451_am value without executing any GL/LWJGL.
      */
@@ -1629,10 +1695,13 @@ public final class LegacyRenderCapture {
         for (ModContainer container : Loader.instance().getModList()) {
             Object mod = null;
             String modId = safeModId(container);
+            // freeze is this loop's one-shot classloading/model parsing on the render
+            // thread). Timings ride the existing per-mod log lines; no behaviour change.
+            long modStartNanos = System.nanoTime();
             try {
                 mod = container.getMod();
                 if (mod == null) {
-                    clientProxyLog(modId, false, "mod-null");
+                    clientProxyLog(modId, false, "mod-null" + proxyMs(modStartNanos));
                     continue;
                 }
                 List<Object> proxies = new ArrayList<Object>();
@@ -1660,7 +1729,7 @@ public final class LegacyRenderCapture {
                     }
                 }
                 if (proxies.isEmpty()) {
-                    clientProxyLog(modId, true, "no-annotated-client-proxy");
+                    clientProxyLog(modId, true, "no-annotated-client-proxy" + proxyMs(modStartNanos));
                     continue;
                 }
                 int invoked = 0;
@@ -1701,14 +1770,16 @@ public final class LegacyRenderCapture {
                     }
                 }
                 if (failures == 0) {
-                    clientProxyLog(modId, true, "hooks=" + invoked + " [" + hooks + "]");
+                    clientProxyLog(modId, true, "hooks=" + invoked + " [" + hooks + "]"
+                            + proxyMs(modStartNanos));
                 } else {
-                    clientProxyLog(modId, false, "hook-failures=" + failures + " invoked=" + invoked);
+                    clientProxyLog(modId, false, "hook-failures=" + failures + " invoked=" + invoked
+                            + proxyMs(modStartNanos));
                 }
             } catch (Throwable failure) {
                 Throwable cause = failure instanceof InvocationTargetException
                         && failure.getCause() != null ? failure.getCause() : failure;
-                clientProxyLog(modId, false, reason(cause));
+                clientProxyLog(modId, false, reason(cause) + proxyMs(modStartNanos));
             }
         }
     }
@@ -1742,6 +1813,11 @@ public final class LegacyRenderCapture {
             while (text.indexOf("  ") >= 0) text = text.replace("  ", " ");
             return text.length() > 320 ? text.substring(0, 320) + "..." : text;
         }
+    }
+
+    /** Milliseconds-since helper for the per-mod proxy timing (bug3-4 lane, bug #3). */
+    private static String proxyMs(long startNanos) {
+        return " ms=" + ((System.nanoTime() - startNanos) / 1_000_000L);
     }
 
     private static String safeModId(ModContainer container) {
@@ -1977,7 +2053,17 @@ public final class LegacyRenderCapture {
         if (genericAnimationFieldName(n)) return true;
         String[] tokens = {"rotor", "prop", "throttle", "turret", "wheel", "track", "anim",
                 "spin", "gear", "flap", "wing", "door", "weapon", "damage", "model", "info",
-                "seat", "uav", "fold", "canopy", "rudder", "elevator", "aileron", "brake"};
+                "seat", "uav", "fold", "canopy", "rudder", "elevator", "aileron", "brake",
+                // types sharing one entity class (MCHeli mk15 vs s-75, both
+                // MCH_EntityVehicle) collide on the class+animation-state key and render
+                // each other's cached mesh. These name-ish info/model fields are stable
+                // per type (displayName, category, kind, texture paths), so including
+                // them only ever SPLITS keys, never merges: correctness strictly
+                // improves, at bounded extra cache entries. Deliberately NOT in
+                // dynamicStateName below, so they stay static-only and cannot flip the
+                // static/dynamic classification (both sides gain them equally).
+                "name", "title", "kind", "category", "directory", "texture", "skin",
+                "variant"};
         for (String token : tokens) if (n.contains(token)) return true;
         return false;
     }
@@ -2026,6 +2112,8 @@ public final class LegacyRenderCapture {
         final List<EntityRenderCapture.Draw> draws=new ArrayList<EntityRenderCapture.Draw>();
         final GlEmulationSession emulation;
         final ArrayDeque<double[]> stack=new ArrayDeque<double[]>(); final double[] m=identity();
+        /** Tessellator.setTranslation/addTranslation offset, added to its vertices only. */
+        double tessX, tessY, tessZ;
         List<Float> data; String texture; float u,v,nx,ny,nz; int mode; int ops,pushes,pops; boolean drawing;
         Capture(String c,String k,String cache,String transform,String mesh,boolean geometry){entityClass=c;stateKey=k;cacheKey=cache;transformKey=transform;meshKey=mesh;geometryEnabled=geometry;emulation=new GlEmulationSession(geometry);}
         void begin(int x){draw();mode=x;drawing=true;emulation.begin(x);}

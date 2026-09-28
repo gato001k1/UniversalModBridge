@@ -28,6 +28,21 @@ public final class LegacyServerTickHook {
     private LegacyServerTickHook() {
     }
 
+    /** Runs before PlayerList sends the join/terrain packets, so a lazy legacy boot cannot leave
+     * the client simulating an empty world while the server thread is blocked in Forge startup. */
+    public static void beforePlayerJoin(ServerPlayer player) {
+        try {
+            if (player == null || player.level() == null) return;
+            HostWorldImpl world = new HostWorldImpl(player.level());
+            if (!UmbBridgeHost.ensureBooted(world)) return;
+            LegacyBridge bridge = UmbBridgeHost.get();
+            if (bridge instanceof BridgeRouter router) router.prewarmEras(world);
+            AgentLog.line("UMB world-join legacy boot gate complete");
+        } catch (Throwable t) {
+            AgentLog.error("LegacyServerTickHook.beforePlayerJoin", t, 5);
+        }
+    }
+
     public static void serverTickStart(MinecraftServer server) {
         dispatch(server, false);
     }

@@ -55,7 +55,6 @@ final class UmbServer1165 {
             // Do not use the lifecycle thread as an executor and do not wait forever. Vanilla's
             // reload graph can schedule completion on its apply executor; a direct executor can
             // make the lifecycle thread wait for work that only it can run. Dedicated daemon
-            // workers keep this facade independent and make a broken pack fail clearly.
             ExecutorService reloadExecutor = Executors.newSingleThreadExecutor(
                     named("umb-1165-datapack-reload"));
             ExecutorService applyExecutor = Executors.newSingleThreadExecutor(
@@ -87,12 +86,10 @@ final class UmbServer1165 {
                         new ArrayList<net.minecraft.resources.IResourceManagerReloadListener>();
                 for (net.minecraft.resources.IFutureReloadListener listener : event.getListeners()) {
                     modReloadListeners++;
-                    // The child runtime replaces IResourceManagerReloadListener's default
-                    // IFutureReloadListener adapter with a Mixin stub.  Registering such a
-                    // listener with AsyncReloader therefore fails before the mod callback runs.
-                    // Run its real, synchronous reload contract after the vanilla graph has
-                    // loaded instead; IFutureReloadListener implementations remain on the
-                    // normal asynchronous path.
+                    // Synchronous listeners run on the direct path after the vanilla graph has
+                    // loaded, one at a time, so a mod listener that throws (e.g. one calling a
+                    // Mixin accessor nothing has applied) is logged instead of failing the whole
+                    // reload. IFutureReloadListener implementations stay asynchronous.
                     if (listener instanceof net.minecraft.resources.IResourceManagerReloadListener) {
                         directReloadListeners.add(
                                 (net.minecraft.resources.IResourceManagerReloadListener) listener);
@@ -100,6 +97,9 @@ final class UmbServer1165 {
                         resourceManager.func_219534_a(listener);
                     }
                 }
+                // Forge also registers the event's listeners on the manager, wrapped; route
+                // those to the direct path too.
+                moveSynchronousListeners(resourceManager, directReloadListeners);
                 CompletableFuture<net.minecraft.util.Unit> loaded = resourceManager.func_219536_a(
                         reloadExecutor, applyExecutor, packs,
                         CompletableFuture.completedFuture(net.minecraft.util.Unit.INSTANCE));
@@ -110,8 +110,9 @@ final class UmbServer1165 {
                         try {
                             listener.func_195410_a(resourceManager);
                         } catch (Throwable failure) {
-                            throw new IllegalStateException(
-                                    "1.16.5 direct resource reload listener failed", failure);
+                            // One mod's broken listener must not take the whole era down.
+                            System.out.println("[UMB-BRIDGE-1165] reload listener "
+                                    + listener.getClass().getName() + " failed: " + failure);
                         }
                     }
                     registries = pending;
@@ -170,6 +171,47 @@ final class UmbServer1165 {
                 return thread;
             }
         };
+    }
+
+    /**
+     * Moves every synchronous listener (IResourceManagerReloadListener, including ones inside
+     * Forge's AddReloadListenerEvent wrapper) from the manager's listener lists to the direct
+     * path.
+     */
+    @SuppressWarnings("unchecked")
+    private static void moveSynchronousListeners(net.minecraft.resources.IReloadableResourceManager manager,
+            List<net.minecraft.resources.IResourceManagerReloadListener> direct) throws Exception {
+        for (String name : new String[] {"field_199015_d", "field_219539_d"}) {
+            java.lang.reflect.Field field =
+                    net.minecraft.resources.SimpleReloadableResourceManager.class.getDeclaredField(name);
+            field.setAccessible(true);
+            List<net.minecraft.resources.IFutureReloadListener> listeners =
+                    (List<net.minecraft.resources.IFutureReloadListener>) field.get(manager);
+            java.util.Iterator<net.minecraft.resources.IFutureReloadListener> it = listeners.iterator();
+            while (it.hasNext()) {
+                Object inner = unwrapForgeListener(it.next());
+                if (inner instanceof net.minecraft.resources.IResourceManagerReloadListener) {
+                    it.remove();
+                    if (!direct.contains(inner)) {
+                        direct.add((net.minecraft.resources.IResourceManagerReloadListener) inner);
+                    }
+                }
+            }
+        }
+    }
+
+    /** Unwraps AddReloadListenerEvent's state-aware wrapper; other listeners pass through. */
+    private static Object unwrapForgeListener(net.minecraft.resources.IFutureReloadListener listener) {
+        if (!listener.getClass().getName().startsWith("net.minecraftforge.event.AddReloadListenerEvent$")) {
+            return listener;
+        }
+        try {
+            java.lang.reflect.Field wrapped = listener.getClass().getDeclaredField("wrapped");
+            wrapped.setAccessible(true);
+            return wrapped.get(listener);
+        } catch (ReflectiveOperationException e) {
+            return listener;
+        }
     }
 
     private static int invokeMissingReloadListeners(

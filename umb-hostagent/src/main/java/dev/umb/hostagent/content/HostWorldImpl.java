@@ -778,6 +778,7 @@ final class HostWorldImpl implements HostWorld, HostLevel {
             e.applyLegacyBounds(handle);
             boolean added = level.addFreshEntity(e);
             if (added) entityTwins.put(handle, e);
+            if (added) e.syncPartTwins(handle);
             AgentLog.line("ENTITY-DIAG HostWorldImpl.spawnEntity result added=" + added
                     + " twin=" + e.getUUID());
             return added;

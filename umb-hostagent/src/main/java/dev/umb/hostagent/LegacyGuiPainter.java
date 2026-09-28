@@ -16,17 +16,46 @@ public final class LegacyGuiPainter {
 
     public static int paint(GuiGraphicsExtractor gui, GlEmulationSession.Mesh mesh,
                      int left, int top, int width, int height) {
+        return paint(gui, mesh, left, top, width, height, false);
+    }
+
+    /**
+     * @param fullscreenGuard when true, applies {@link LegacyHudPainter#shouldPaint} instead of
+     *        this class's own (narrower, alpha-test-only) {@link #shouldPaint} per draw: an
+     *        untextured quad covering the whole {@code width}x{@code height} viewport is dropped
+     *        before painting. The host already owns full-screen vanilla overlays (portal,
+     *        vignette, helmet); replaying an incomplete legacy blend state as an opaque
+     *        full-screen fill turns the world white. A bounded {@code GuiContainer} panel (the
+     *        original call site below) never legitimately spans the whole viewport, so it never
+     *        needed this guard; a full-viewport HUD overlay capture always does.
+     */
+    public static int paint(GuiGraphicsExtractor gui, GlEmulationSession.Mesh mesh,
+                     int left, int top, int width, int height, boolean fullscreenGuard) {
         if (gui == null || mesh == null || mesh.draws.isEmpty()) return 0;
         boolean sampling = beginSample(mesh);
         String era = meshEra(mesh);
         int painted = 0;
         gui.nextStratum();
         int di = -1;
+        int sampledSmall = 0;
         for (GlEmulationSession.Draw draw : mesh.draws) {
             di++;
-            SampleDraw sample = sampling && di < SAMPLE_DRAWS ? new SampleDraw() : null;
+            SampleDraw sample = null;
+            if (sampling) {
+                if (di < SAMPLE_DRAWS) {
+                    sample = new SampleDraw();
+                } else if (sampledSmall < SAMPLE_SMALL_UNTEXTURED
+                        && isSmallUntextured(draw)) {
+                    sample = new SampleDraw();
+                    sampledSmall++;
+                    sample.head.append(" SMALL-UNTEX");
+                }
+            }
             if (sample != null) sample.header(di, draw);
-            if (!shouldPaint(draw, width, height)) {
+            boolean paintable = fullscreenGuard
+                    ? LegacyHudPainter.shouldPaint(draw, width, height)
+                    : shouldPaint(draw, width, height);
+            if (!paintable) {
                 endSample(sample, "SKIP-unpaintable");
                 continue;
             }
@@ -128,17 +157,87 @@ public final class LegacyGuiPainter {
     }
 
     private static final int SAMPLE_DRAWS = 12;
-    private static boolean meshSampled = false;
-    private static StringBuilder meshSampleOut = null;
+    /**
+     * first-12 window). Capped per mesh so one pathological GUI cannot flood the log.
+     */
+    private static final int SAMPLE_SMALL_UNTEXTURED = 48;
+    /** One sample per distinct mesh shape (was: first mesh of the JVM, usually the HUD). */
+    private static final int MAX_SAMPLED_SHAPES = 24;
+    private static final java.util.Set<String> sampledShapes = new java.util.LinkedHashSet<>();
 
-    /** Logs a bounded summary of the first mesh to diagnose texture and UV failures. */
+    /** A small untextured quad like an LCD segment: bounded, panel-plausible, worth logging. */
+    static boolean isSmallUntextured(GlEmulationSession.Draw draw) {
+        if (draw == null || draw.vertices == null || draw.vertices.size() < 4) return false;
+        boolean textured = draw.state != null
+                && draw.state.enabledCaps.contains(GL_TEXTURE_2D)
+                && draw.texture != null && !draw.texture.isEmpty();
+        if (textured) return false;
+        float minX = Float.POSITIVE_INFINITY, minY = Float.POSITIVE_INFINITY;
+        float maxX = Float.NEGATIVE_INFINITY, maxY = Float.NEGATIVE_INFINITY;
+        for (GlEmulationSession.Vertex v : draw.vertices) {
+            if (v == null || !Float.isFinite(v.x) || !Float.isFinite(v.y)) return false;
+            if (v.x < minX) minX = v.x;
+            if (v.y < minY) minY = v.y;
+            if (v.x > maxX) maxX = v.x;
+            if (v.y > maxY) maxY = v.y;
+        }
+        float w = maxX - minX, h = maxY - minY;
+        return w > 0.0F && h > 0.0F && w <= 32.0F && h <= 32.0F;
+    }
+
+    /**
+     * Mesh-shape-keyed diagnostic (was: first mesh of the JVM, which the HUD always consumed
+     * before any GUI was ever sampled): records one mesh's per-draw data plus what paint()
+     * decided, keyed by GUI art so every new GUI shape gets exactly one live log line. Bounded
+     * by shape count; live logs stay quiet afterwards.
+     */
     static synchronized boolean beginSample(GlEmulationSession.Mesh mesh) {
-        if (meshSampled || mesh == null || mesh.draws.isEmpty()) return false;
-        meshSampled = true;
-        meshSampleOut = new StringBuilder(8192);
-        meshSampleOut.append("[UMB-GUI] mesh sample draws=").append(mesh.draws.size());
+        if (mesh == null || mesh.draws.isEmpty()) return false;
+        String key = sampleKey(mesh);
+        if (sampledShapes.contains(key) || sampledShapes.size() >= MAX_SAMPLED_SHAPES) {
+            return false;
+        }
+        sampledShapes.add(key);
+        meshSampleOut = new StringBuilder(32768);
+        meshSampleOut.append("[UMB-GUI] mesh sample key=").append(key)
+                .append(" draws=").append(mesh.draws.size());
         return true;
     }
+
+    /** GUI identity for sampling: first mod-namespaced bind, else the draw/vertex shape. */
+    static String sampleKey(GlEmulationSession.Mesh mesh) {
+        try {
+            int scans = Math.min(mesh.draws.size(), 8);
+            for (int i = 0; i < scans; i++) {
+                GlEmulationSession.Draw d = mesh.draws.get(i);
+                if (d == null || d.texture == null) continue;
+                String raw = d.texture.trim();
+                if (raw.length() > 160) raw = raw.substring(0, 160);
+                int colon = raw.indexOf(':');
+                if (colon <= 0) continue;
+                String ns = raw.substring(0, colon).toLowerCase(java.util.Locale.ROOT);
+                if (ns.equals("minecraft") || ns.startsWith("umbvanilla")
+                        || ns.equals("umbatlas")) {
+                    continue;
+                }
+                return d.texture;
+            }
+        } catch (Throwable ignored) {
+            // Fall through to the shape fallback below.
+        }
+        int verts = 0;
+        try {
+            int scans = Math.min(mesh.draws.size(), 32);
+            for (int i = 0; i < scans; i++) {
+                GlEmulationSession.Draw d = mesh.draws.get(i);
+                if (d != null && d.vertices != null) verts += d.vertices.size();
+            }
+        } catch (Throwable ignored) {
+        }
+        return "shape:" + mesh.draws.size() + "v" + verts;
+    }
+
+    private static StringBuilder meshSampleOut = null;
 
     private static final class SampleDraw {
         final StringBuilder head = new StringBuilder(512);
@@ -214,7 +313,7 @@ public final class LegacyGuiPainter {
      * mod-namespaced bind in the mesh identifies it; unowned namespaces belong to the
      * default 1.7.10 side, exactly like bridge routing itself.
      */
-    private static String meshEra(GlEmulationSession.Mesh mesh) {
+    static String meshEra(GlEmulationSession.Mesh mesh) {
         try {
             int scans = Math.min(mesh.draws.size(), 8);
             for (int i = 0; i < scans; i++) {

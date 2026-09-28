@@ -213,6 +213,39 @@ public final class BridgeRouter implements LegacyBridge {
         boot.start();
     }
 
+    /**
+     * Placement gate for an id owned by a non-default era. A pending era must not fall through
+     * to the default bridge: BlockItem would otherwise place the native fallback and consume the
+     * held stack before the real era has a chance to create its tile.
+     */
+    boolean readyForPlacement(String id) {
+        EraHolder holder = holderFor(id);
+        if (holder == null) return true;
+        String era = eraFor(id);
+        if (!UmbSettings.eraEnabled(era) || holder.broken) return false;
+        LegacyBridge b = holder.bridge;
+        if (b != null) {
+            try {
+                return b.isBooted();
+            } catch (Throwable t) {
+                AgentLog.error("BridgeRouter.readyForPlacement(" + id + ")", t, 2);
+                return false;
+            }
+        }
+        startEraBoot(era, holder);
+        return false;
+    }
+
+    /** Starts every admitted non-default era before a player is admitted to the world. */
+    void prewarmEras(HostWorld world) {
+        lastWorld = world;
+        synchronized (this) {
+            for (Map.Entry<String, EraHolder> entry : eras.entrySet()) {
+                if (UmbSettings.eraEnabled(entry.getKey())) startEraBoot(entry.getKey(), entry.getValue());
+            }
+        }
+    }
+
     // ---------------------------------------------------------------- LegacyBridge
 
     @Override
@@ -555,6 +588,44 @@ public final class BridgeRouter implements LegacyBridge {
             return route(legacyBlockId, true).selectionBoxes(legacyBlockId, x, y, z);
         } catch (Throwable t) {
             AgentLog.error("BridgeRouter.selectionBoxes(" + legacyBlockId + ")", t, 3);
+            return null;
+        }
+    }
+
+    @Override
+    public boolean hasItemRenderer(String legacyItemId, int damage, String renderType) {
+        LegacyBridge r = route(legacyItemId, false);
+        if (r == null) return false;
+        try {
+            return r.hasItemRenderer(legacyItemId, damage, renderType);
+        } catch (Throwable t) {
+            AgentLog.error("BridgeRouter.hasItemRenderer(" + legacyItemId + ")", t, 3);
+            return false;
+        }
+    }
+
+    @Override
+    public dev.umb.bridge.api.EntityRenderCapture captureItem(String legacyItemId, int count,
+            int damage, byte[] nbt, String renderType, float partialTick, boolean transformOnly) {
+        LegacyBridge r = route(legacyItemId, false);
+        if (r == null) return null;
+        try {
+            return r.captureItem(legacyItemId, count, damage, nbt, renderType, partialTick,
+                    transformOnly);
+        } catch (Throwable t) {
+            AgentLog.error("BridgeRouter.captureItem(" + legacyItemId + ")", t, 3);
+            return null;
+        }
+    }
+
+    @Override
+    public java.util.List<double[]> cachedShape(String legacyBlockId, int x, int y, int z,
+            boolean selection) {
+        // Read-only and called from client threads: never boots an era.
+        try {
+            return route(legacyBlockId, false).cachedShape(legacyBlockId, x, y, z, selection);
+        } catch (Throwable t) {
+            AgentLog.error("BridgeRouter.cachedShape(" + legacyBlockId + ")", t, 3);
             return null;
         }
     }

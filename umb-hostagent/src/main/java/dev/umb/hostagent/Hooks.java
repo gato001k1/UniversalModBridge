@@ -42,8 +42,10 @@ public final class Hooks {
             AgentLog.error("Hooks.beforeFreeze", t, 8);
         }
         try {
-            // Tile and menu types must be registered before freeze because screen packets use
-            // their registry ids. A failure here must not roll back earlier content registration.
+            // G2 step 2: BlockEntityType umb:legacy_tile + MenuType umb:legacy_menu, both PRE-FREEZE
+            // (R5: singleplayer still serialises the open-screen packet by registry id). Separate
+            // try/catch on purpose: a failure here must never roll back the block/item/tab
+            // registration that already succeeded above.
             if (HostAgent.contentManifest() != null) {
                 for (dev.umb.hostagent.content.ModContentRecord r : HostAgent.contentManifest().records())
                     Registrar.registerLegacyTileAndMenu(r.namespace());
@@ -53,7 +55,8 @@ public final class Hooks {
             AgentLog.error("Hooks.beforeFreeze (tile/menu)", t, 8);
         }
         try {
-            // Entity registration shares the pre-freeze window but fails independently.
+            // ENTITY-BRIDGE: umb:legacy_entity, same pre-freeze window, own try/catch so a failure
+            // here never rolls back the tile/menu registration above.
             if (HostAgent.contentManifest() != null) {
                 for (dev.umb.hostagent.content.ModContentRecord r : HostAgent.contentManifest().records())
                     Registrar.registerLegacyEntityType(r.namespace());
@@ -113,6 +116,8 @@ public final class Hooks {
         } catch (Throwable t) { AgentLog.error("Hooks.serverEffectsEnd", t, 4); }
     }
 
+    // ---------------------------------------------------------- creative paging
+    //
     // Five seams spliced into CreativeModeInventoryScreen by CreativePagingPatcher. All of them
     // delegate to CreativePaging and none of them may throw into the render or input thread.
     // The screen-typed parameters are declared as Object on purpose: the injected call sites just
@@ -179,9 +184,9 @@ public final class Hooks {
         try {
             net.minecraft.client.Minecraft minecraft = net.minecraft.client.Minecraft.getInstance();
             if (graphics == null || minecraft.player == null) return;
-            // Legacy overlay meshes can contain full-screen fills, so HUD replay is opt-in until
-            // those fills can be distinguished reliably from intentional overlays.
-            String hudMode = System.getProperty("umb.legacyHud", "off");
+            // The legacy overlay paints while riding by default (the vehicle HUD case; live on
+            // it on foot too, -Dumb.legacyHud=off disables it.
+            String hudMode = System.getProperty("umb.legacyHud", "riding");
             if ("off".equals(hudMode)) return;
             if (!minecraft.player.isPassenger() && !"all".equals(hudMode)) return;
             dev.umb.bridge.api.LegacyBridge bridge = UmbBridgeHost.get();
@@ -207,8 +212,8 @@ public final class Hooks {
             dev.umb.bridge.api.LegacyBridge.CameraState state = bridge.cameraState(
                     minecraft.player.getName().getString());
             if (state == null || !state.overridden) return;
-            // The facade's view entity may differ from its player even while walking. Mirror it
-            // only while riding and only when its position is finite.
+            // its player, so "overridden" was true while walking and the whole world rendered
+            // white. Only mirror a legacy view while actually riding, with a sane position.
             if (!minecraft.player.isPassenger()) return;
             if (!Double.isFinite(state.x) || !Double.isFinite(state.y) || !Double.isFinite(state.z)) return;
             double dx = state.x - minecraft.player.getX(), dy = state.y - minecraft.player.getY(),
@@ -233,6 +238,117 @@ public final class Hooks {
 
     public static void prevPage() {
         CreativePaging.prevPage(null);
+    }
+
+    /**
+     * Generous-click seam for legacy vehicle twins, called from the patched
+     * {@code LocalPlayer.pick} with its vanilla result. Vanilla aim already tests every
+     * pickable twin by its own box; this only runs when vanilla MISSED outright (no block, no
+     * entity), and re-tests the same ray against legacy twin boxes inflated by
+     * {@link #LEGACY_PICK_MARGIN}. A hit returns a real {@code EntityHitResult} for the
+     * nearest twin, so the normal interact packet + server validation path runs unchanged -
+     * thin slabs (a 0.3-block wing box) and grazing angles that slip through the exact test
+     * still board. Never reaches past vanilla's own reach, never steals a vanilla hit, never
+     * throws.
+     */
+    public static net.minecraft.world.phys.HitResult pickLegacyPart(
+            net.minecraft.world.entity.Entity shooter,
+            double blockReach, double entityReach, float partialTick,
+            net.minecraft.world.phys.HitResult vanilla) {
+        try {
+            if (vanilla == null
+                    || vanilla.getType() != net.minecraft.world.phys.HitResult.Type.MISS) {
+                return vanilla;
+            }
+            if (shooter == null) {
+                return vanilla;
+            }
+            net.minecraft.world.level.Level level = shooter.level();
+            if (level == null || !level.isClientSide()) {
+                return vanilla;
+            }
+            double range = Math.max(blockReach, entityReach);
+            if (!(range > 0.0D) || !Double.isFinite(range)) {
+                return vanilla;
+            }
+            net.minecraft.world.phys.Vec3 eye = shooter.getEyePosition(partialTick);
+            net.minecraft.world.phys.Vec3 view = shooter.getViewVector(partialTick);
+            net.minecraft.world.phys.Vec3 end = eye.add(view.scale(range));
+            net.minecraft.world.phys.AABB search = shooter.getBoundingBox()
+                    .expandTowards(view.scale(range)).inflate(1.0D);
+            java.util.List<net.minecraft.world.entity.Entity> twins;
+            try {
+                twins = level.getEntities(shooter, search,
+                        e -> e instanceof dev.umb.hostagent.content.UmbLegacyEntity
+                                || e instanceof dev.umb.hostagent.content.UmbLegacyPartTwin);
+            } catch (Throwable ignored) {
+                return vanilla;
+            }
+            if (twins == null || twins.isEmpty()) {
+                return vanilla;
+            }
+            java.util.List<net.minecraft.world.phys.AABB> boxes =
+                    new java.util.ArrayList<>(twins.size());
+            java.util.List<net.minecraft.world.entity.Entity> owners =
+                    new java.util.ArrayList<>(twins.size());
+            for (net.minecraft.world.entity.Entity twin : twins) {
+                if (twin == null || twin == shooter || twin.isRemoved() || twin.isSpectator()) {
+                    continue;
+                }
+                boxes.add(twin.getBoundingBox().inflate(LEGACY_PICK_MARGIN));
+                owners.add(twin);
+            }
+            int hit = nearestHitIndex(eye, end, range * range, boxes);
+            if (hit < 0) {
+                return vanilla;
+            }
+            net.minecraft.world.entity.Entity target = owners.get(hit);
+            java.util.Optional<net.minecraft.world.phys.Vec3> loc =
+                    boxes.get(hit).clip(eye, end);
+            return new net.minecraft.world.phys.EntityHitResult(target,
+                    loc.orElse(end));
+        } catch (Throwable t) {
+            AgentLog.error("Hooks.pickLegacyPart", t, 2);
+            return vanilla;
+        }
+    }
+
+    /** Legacy click generosity (blocks) added around twin boxes in the fallback pick only. */
+    static final double LEGACY_PICK_MARGIN = 0.3D;
+
+    /**
+     * Pure nearest-ray-hit over boxes; directly unit-testable. Returns the winning index or -1.
+     * Mirrors vanilla's rule (nearest clip within range wins, no skipping).
+     */
+    static int nearestHitIndex(net.minecraft.world.phys.Vec3 eye,
+            net.minecraft.world.phys.Vec3 end, double rangeSq,
+            java.util.List<net.minecraft.world.phys.AABB> boxes) {
+        if (eye == null || end == null || boxes == null || !(rangeSq > 0.0D)) {
+            return -1;
+        }
+        int best = -1;
+        double bestDist = rangeSq;
+        for (int i = 0; i < boxes.size(); i++) {
+            net.minecraft.world.phys.AABB box = boxes.get(i);
+            if (box == null) {
+                continue;
+            }
+            java.util.Optional<net.minecraft.world.phys.Vec3> hit;
+            try {
+                hit = box.clip(eye, end);
+            } catch (Throwable ignored) {
+                continue;
+            }
+            if (hit == null || hit.isEmpty()) {
+                continue;
+            }
+            double dist = eye.distanceToSqr(hit.get());
+            if (dist < bestDist) {
+                bestDist = dist;
+                best = i;
+            }
+        }
+        return best;
     }
 
     /**

@@ -29,7 +29,6 @@ import java.util.Set;
 import java.util.TreeMap;
 
 /**
- * Generates the OVERLAY resource pack {@code research/out/legacy/packs/hbm-objmodels}.
  *
  * <pre>
  * java dev.umb.objbridge.gen.ObjPackGen &lt;render-map.json&gt; &lt;snapshot.json&gt; &lt;assetsRoot&gt; &lt;outDir&gt;
@@ -43,7 +42,6 @@ import java.util.TreeMap;
  *       {@code pack_version.resource_major}),</li>
  *   <li>{@code assets/minecraft/atlases/blocks.json} with ONE extra
  *       {@code minecraft:directory} source, {@code prefix "models/"} / {@code source "models"}. Atlas
- *       configs are read with {@code ResourceManager.getResourceStack} (javap-verified), so every
  *       pack's copy is concatenated - this ADDS a source instead of replacing vanilla's,</li>
  *   <li>{@code assets/&lt;ns&gt;/textures/models/**.png} (the chosen textures, copied to lowercased
  *       paths because {@code Identifier} paths only allow {@code [a-z0-9/._-]}) and
@@ -63,6 +61,15 @@ public final class ObjPackGen {
     private record Def(String legacyId, String packPath, String objPath, String spriteId,
                        String reason, int triangles, int groups, boolean viaBlock, String rendererClass) { }
 
+    /**
+     * no recoverable OBJ geometry (a hand-coded Java model, for one concrete example - MCHeli's
+     * weapon renderers build their mesh from Java calls, not an {@code .obj} file). {@code umb:obj}
+     * cannot describe these at all (see the {@code "no-obj"} skip below); they still get a
+     * {@code "type":"umb:held"} wrapper around the base pack's own flat model so
+     * {@code HeldItemModel}'s live-renderer check still runs for them at draw time.
+     */
+    private record HeldOnlyRow(String legacyId, String packPath) { }
+
     /** One block that the agent should splice at runtime. */
     private record BlockEntry(String blockId, String objPath, String spriteId, String reason,
                               int triangles) { }
@@ -70,7 +77,6 @@ public final class ObjPackGen {
     /** Above this derived vanilla-relative GUI scale, the item def is marked {@code oversized_in_gui}
      *  (see {@link #itemDef}) so 26.2's own picture-in-picture item renderer draws it past the 16x16
      *  slot instead of it being silently squashed to fit or clipped - see {@code ObjTransforms}'s class
-     *  docs for the javap evidence this vanilla mechanism exists and is safe to set generously. 1.0 =
      *  "already fills a full block-unit at its longest axis," clearly past what a 16x16 icon can show at
      *  the vanilla default of 0.625 without help. */
     static final float OVERSIZED_GUI_SCALE_THRESHOLD = 1.0f;
@@ -143,6 +149,7 @@ public final class ObjPackGen {
 
         // ------------------------------------------------------------ pick per row
         List<Def> defs = new ArrayList<>();
+        List<HeldOnlyRow> heldOnlyRows = new ArrayList<>();
         Map<String, RenderMap.Asset> texturesToCopy = new LinkedHashMap<>();   // spriteId -> asset
         Map<String, Integer> reasonCounts = new TreeMap<>();
         Map<String, Integer> skipCounts = new TreeMap<>();
@@ -158,6 +165,15 @@ public final class ObjPackGen {
             if (pick.model() == null) {
                 bump(skipCounts, "no-obj");
                 if (skipDetail.size() < 40) skipDetail.add(id + " : no OBJ in models[] (" + row.models().size() + " entries)");
+                // WAS detected for this item (row.rendererClass() - the same generic signal
+                // #oversized already uses) - HeldItemModel's live capture path still applies to
+                // it at draw time, so wrap the base pack's flat model instead of leaving it as a
+                // permanent placeholder. A row with no detected renderer class at all is a plain
+                // vanilla-shaped item with nothing to gain from the wrapper, so it is left alone.
+                if (row.rendererClass() != null) {
+                    String heldPath = TexturePick.sanitize(bare(id));
+                    if (!heldPath.isEmpty()) heldOnlyRows.add(new HeldOnlyRow(id, heldPath));
+                }
                 continue;
             }
             if (pick.texture() == null) {
@@ -179,6 +195,25 @@ public final class ObjPackGen {
             bump(reasonCounts, pick.reason().name());
             defs.add(new Def(id, packPath, pick.model().path(), sprite, pick.reason().name(), tris,
                     row.groups().size(), snap.blockIds.contains(id), row.rendererClass()));
+        }
+
+        // renderer class for these at all (see RenderMap.UnattributedItemRow's own javadoc:
+        // field-tracing cannot follow an item constructed inside a loop over a data-driven config
+        // table, a common pattern for a mod with many similar item variants - MCHeli's own
+        // light-weapon items, e.g. fim92/fgm148, are exactly this shape and were otherwise
+        // invisible to ObjPackGen entirely). Wrapping them too is SAFE even though the census
+        // runtime check, so an item that genuinely has no renderer just falls back to its
+        // ordinary base model at draw time, at the cost of one cheap reflective lookup - the same
+        // cost every OBJ-backed held item already pays.
+        int unattributedCandidates = 0;
+        for (RenderMap.UnattributedItemRow row : map.unattributedItems()) {
+            String id = row.id();
+            if (id == null || !id.startsWith(ns + ":")) continue;
+            if (!snap.itemIds.contains(id)) continue;
+            String heldPath = TexturePick.sanitize(bare(id));
+            if (heldPath.isEmpty() || emittedPaths.contains(heldPath)) continue;
+            heldOnlyRows.add(new HeldOnlyRow(id, heldPath));
+            unattributedCandidates++;
         }
 
         // ------------------------------------------------------------ blocks
@@ -228,7 +263,6 @@ public final class ObjPackGen {
         // alone). The render map only knows the base id. We therefore look at the base pack's own item
         // definitions and mirror our def onto every `<basePath>_<digits>` sibling that really exists -
         // an override can only ever hit a path the base pack already declares, so this cannot invent
-        // anything. Anything else is reported for the lead instead of guessed.
         // The base pack directory used to be hardcoded to "hbm-generated" regardless of which mod
         // this run targets - harmless for HBM (the only mod that literal ever matched) but on any
         // other mod's run it either read a stale/leftover HBM pack from a previous run (silent
@@ -283,7 +317,6 @@ public final class ObjPackGen {
         }
 
         // ------------------------------------------------------------ write
-        // SAFETY (2026-09-09): this generator used to delete outDir and only THEN start writing, so
         // any fault mid-generation (a missing library on the classpath, a bad asset) destroyed the
         // live pack and left a half-built directory behind. That actually happened: the pack was
         // reduced to 426 of 983 files by a NoClassDefFoundError. Build into a staging directory and
@@ -358,6 +391,17 @@ public final class ObjPackGen {
             boolean big = oversized(transforms, d.rendererClass(), oversizedSkipReason);
             if (big) oversizedCount++;
             write(f, itemDef(d.objPath(), d.spriteId(), big));
+        }
+
+        // "no-obj" skip above). emittedPaths already carries every def/block/variant path chosen
+        // above, so this can only ever ADD a wrapper around a path nothing else claimed.
+        int heldOnlyWritten = 0;
+        for (HeldOnlyRow h : heldOnlyRows) {
+            if (!emittedPaths.add(h.packPath())) continue;
+            Path f = workDir.resolve("assets/" + ns + "/items/" + h.packPath() + ".json");
+            Files.createDirectories(f.getParent());
+            write(f, heldOnlyDef(ns, h.packPath()));
+            heldOnlyWritten++;
         }
 
         // Generation of every pack file succeeded. Only now is it safe to replace the live pack.
@@ -524,6 +568,9 @@ public final class ObjPackGen {
         write(report, r.toString());
 
         System.out.println("item defs   : " + defs.size());
+        System.out.println("held-only   : " + heldOnlyWritten + " (" + heldOnlyRows.size()
+                + " candidates: rendererClass-detected-no-OBJ + " + unattributedCandidates
+                + " unattributed)");
         System.out.println("blocks      : " + blocks.size());
         System.out.println("textures    : " + copied + " copied, " + copyFailed + " failed");
         System.out.println("reasons     : " + reasonCounts);
@@ -548,7 +595,6 @@ public final class ObjPackGen {
 
     /**
      * @param oversized when true, emits the top-level {@code "oversized_in_gui": true} client-item
-     *                  property (sibling of {@code "model"}, javap-confirmed field name and default
      *                  {@code false} on {@code ClientItem$Properties} - see {@code ObjTransforms}'s class
      *                  docs) so 26.2's own picture-in-picture item renderer lets this item's GUI icon
      *                  overflow its 16x16 slot instead of it being squashed or clipped. Omitted entirely
@@ -565,6 +611,28 @@ public final class ObjPackGen {
         return oversized
                 ? "{\n" + model + ",\n  \"oversized_in_gui\": true\n}\n"
                 : "{\n" + model + "\n}\n";
+    }
+
+    /**
+     * {@code "type":"minecraft:model"} reference {@code dev.umb.packgen.PackGen}'s base layer
+     * already wrote for {@code ns:item/path} (that base {@code models/item/&lt;path&gt;.json} is
+     * untouched - this only overrides the client-item DEFINITION, same as {@link #itemDef} does
+     * for the OBJ case). {@link dev.umb.objbridge.itemeffects.HeldItemModel.Unbaked} decodes
+     * {@code base} through vanilla's own {@code ItemModels.CODEC}, so this is not tied to
+     * {@code "minecraft:model"} specifically - it is simply the type the base pack already uses.
+     */
+    static String heldOnlyDef(String ns, String path) {
+        return """
+                {
+                  "model": {
+                    "type": "umb:held",
+                    "base": {
+                      "type": "minecraft:model",
+                      "model": %s
+                    }
+                  }
+                }
+                """.formatted(q(ns + ":item/" + path));
     }
 
     /**
@@ -707,7 +775,6 @@ public final class ObjPackGen {
          * The snapshot only records each item's BASE legacy id; umb-hostagent additionally
          * registers one entry per distinct metadata damage value
          * ({@code dev.umb.hostagent.content.LegacyIds.variantId} / {@code VariantPlan}, read-only
-         * for this lane, mirrored here so a resolver-produced variant row is not rejected as
          * "not-in-snapshot"). This is the THIRD independent read-only port of that tiny rule
          * (umb-hostagent registers it, umb-rendermap's {@code VariantIdRule} resolves per-variant
          * dynamic rows against it, this one only needs the id set) - all three must keep agreeing,

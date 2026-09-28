@@ -65,6 +65,86 @@ final class EntityHandle1165 implements EntityHandle {
     @Override public float getYaw() { return entity.field_70177_z; }
     @Override public float getPitch() { return entity.field_70125_A; }
     @Override
+    public float getWidth() {
+        try {
+            return entity.func_213305_a(net.minecraft.entity.Pose.STANDING).field_220315_a;
+        } catch (Throwable ignored) {
+            return 0.5F;
+        }
+    }
+    @Override
+    public float getHeight() {
+        try {
+            return entity.func_213305_a(net.minecraft.entity.Pose.STANDING).field_220316_b;
+        } catch (Throwable ignored) {
+            return 0.5F;
+        }
+    }
+    @Override
+    public boolean canBeCollidedWith() {
+        try {
+            return entity.func_70067_L();
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+    @Override
+    public double[] getBoundingBox() {
+        try {
+            net.minecraft.util.math.AxisAlignedBB box = entity.func_174813_aQ();
+            if (box == null) {
+                return null;
+            }
+            return new double[] { box.field_72340_a, box.field_72338_b, box.field_72339_c,
+                    box.field_72336_d, box.field_72337_e, box.field_72334_f };
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+    @Override
+    public boolean interact(dev.umb.bridge.api.HostPlayer player) {
+        try {
+            net.minecraft.entity.player.PlayerEntity legacyPlayer = legacyPlayer(player);
+            if (legacyPlayer == null) {
+                return false;
+            }
+            net.minecraft.util.ActionResultType result = entity.func_184230_a(
+                    legacyPlayer, net.minecraft.util.Hand.MAIN_HAND);
+            return result == net.minecraft.util.ActionResultType.SUCCESS
+                    || result == net.minecraft.util.ActionResultType.CONSUME;
+        } catch (Throwable t) {
+            System.err.println("[UMB-ENTITY-1165] interact failed for "
+                    + entity.getClass().getName() + ": " + t);
+            return false;
+        }
+    }
+    @Override
+    public boolean attack(dev.umb.bridge.api.HostPlayer attacker, String damageType, float amount) {
+        try {
+            net.minecraft.entity.player.PlayerEntity legacyAttacker = legacyPlayer(attacker);
+            net.minecraft.util.DamageSource source = legacyAttacker == null
+                    ? new net.minecraft.util.DamageSource(damageType == null ? "generic" : damageType)
+                    : net.minecraft.util.DamageSource.func_76365_a(legacyAttacker);
+            return entity.func_70097_a(source, amount);
+        } catch (Throwable t) {
+            System.err.println("[UMB-ENTITY-1165] attack failed for "
+                    + entity.getClass().getName() + ": " + t);
+            return false;
+        }
+    }
+    private net.minecraft.entity.player.PlayerEntity legacyPlayer(
+            dev.umb.bridge.api.HostPlayer player) {
+        if (player == null || !(entity.field_70170_p instanceof UmbWorld1165)) {
+            return null;
+        }
+        UmbWorld1165 world = (UmbWorld1165) entity.field_70170_p;
+        UmbPlayer1165 facade = new UmbPlayer1165(world,
+                new net.minecraft.util.math.BlockPos(player.getX(), player.getY(), player.getZ()),
+                player.getName());
+        facade.syncFrom(player);
+        return facade;
+    }
+    @Override
     public String legacyEntityId() {
         return legacyId;
     }

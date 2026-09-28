@@ -11,10 +11,13 @@ import org.objectweb.asm.Type;
 public final class Legacy1122RenderTransformer implements IClassTransformer {
     private static final String GL="net/minecraft/client/renderer/GlStateManager";
     private static final String BB="net/minecraft/client/renderer/BufferBuilder";
+    private static final String TESS="net/minecraft/client/renderer/Tessellator";
+    private static final String TEXMAN="net/minecraft/client/renderer/texture/TextureManager";
     private static final String SINK="dev/umb/legacy1122/legacyside/Legacy1122RenderCapture";
     @Override public byte[] transform(String name,String transformedName,byte[] bytes){
         String target=transformedName==null?name:transformedName;
-        if(bytes==null||target==null||(!target.contains("renderer")&&!target.contains("Renderer")))return bytes;
+        if(bytes==null||target==null||(!target.contains("renderer")&&!target.contains("Renderer")
+                &&!target.contains("Model")))return bytes;
         ClassReader cr=new ClassReader(bytes); ClassWriter cw=new ClassWriter(cr,ClassWriter.COMPUTE_FRAMES);
         cr.accept(new org.objectweb.asm.ClassVisitor(Opcodes.ASM5,cw){
             @Override public MethodVisitor visitMethod(int a,String n,String d,String s,String[] e){
@@ -25,6 +28,8 @@ public final class Legacy1122RenderTransformer implements IClassTransformer {
                         if(owner.equals(BB)&&op==Opcodes.INVOKEVIRTUAL){String[] shim=bb(mn,md);if(shim!=null){
                             out.visitMethodInsn(Opcodes.INVOKESTATIC,SINK,shim[0],shim[1],false);
                             if(Type.getReturnType(md).getSort()!=Type.VOID)out.visitTypeInsn(Opcodes.CHECKCAST,BB); return;}}
+                        if(owner.equals(TESS)&&op==Opcodes.INVOKEVIRTUAL){String[] shim=tess(mn,md);if(shim!=null){out.visitInsn(Opcodes.POP);out.visitMethodInsn(Opcodes.INVOKESTATIC,SINK,shim[0],shim[1],false);return;}}
+                        if(owner.equals(TEXMAN)&&op==Opcodes.INVOKEVIRTUAL){String[] shim=texman(mn,md);if(shim!=null){out.visitInsn(Opcodes.SWAP);out.visitInsn(Opcodes.POP);out.visitMethodInsn(Opcodes.INVOKESTATIC,SINK,shim[0],shim[1],false);return;}}
                         super.visitMethodInsn(op,owner,mn,md,itf);
                     }
                 };}
@@ -38,6 +43,19 @@ public final class Legacy1122RenderTransformer implements IClassTransformer {
         if(d.equals("(I)V"))return new String[]{"matrixOp","(I)V"};
         if(d.equals("(FFF)V"))return new String[]{"matrixOp","(FFF)V"};
         if(d.equals("(FFFF)V"))return new String[]{"matrixOp","(FFFF)V"};
+        return null;
+    }
+    private static String[] tess(String n,String d){
+        // Tessellator.draw() flushes the current vertex batch to GL. Inside a capture
+        // session that flush becomes a mesh flush instead; outside one the sink no-ops.
+        if((n.equals("draw")||n.equals("func_78381_a"))&&d.equals("()V"))return new String[]{"draw","()V"};
+        return null;
+    }
+    private static String[] texman(String n,String d){
+        // TextureManager.bindTexture would upload to real GL. Record the bound id so
+        // draws carry their texture; outside a session this is a no-op.
+        if((n.equals("bindTexture")||n.equals("func_110577_a"))
+                &&d.equals("(Lnet/minecraft/util/ResourceLocation;)V"))return new String[]{"recordTexture","(Ljava/lang/Object;)V"};
         return null;
     }
     private static String[] bb(String n,String d){

@@ -59,7 +59,10 @@ final class UmbSaveHandler extends SaveHandler {
 
     @Override
     public File func_75765_b() {
-        return null;
+        // World-load listeners use this as a stable data-directory anchor.
+        // Keep the facade off disk, but return the same non-null path supplied to
+        // SaveHandler's constructor so mods do not fail on getAbsolutePath().
+        return new File(System.getProperty("java.io.tmpdir"), "umb-legacy-save");
     }
 
     /**

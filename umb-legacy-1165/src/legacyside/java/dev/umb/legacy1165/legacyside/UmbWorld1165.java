@@ -29,7 +29,6 @@ import net.minecraftforge.registries.ForgeRegistries;
 /**
  * The 1.16.5 world facade: a REAL {@code World} subclass with map-backed block/tile storage
  * (no chunks, no server) plus the per-block state-index mapping that lets the pre-BlockState
- * {@code HostWorld.getMeta/setMeta(int)} contract keep working - the lead's round-4 direction
  * ("meta = index into a per-block state list you define", additive proposal stays text-only).
  *
  * <p>Construction ingredients, every one grounded (see ERA-1165-PLAN.md round-4 notes):</p>
@@ -451,6 +450,25 @@ public class UmbWorld1165 extends World {
             if (handle == null) {
                 handle = new EntityHandle1165(entity);
                 entities.put(entity, handle);
+            }
+            // Vanilla posts EntityJoinWorldEvent on spawn and mods build child entities
+            // Post through the Forge bus before twinning; a cancelled join twins nothing.
+            // A throwing listener is logged and treated as non-cancelled, per the shared
+            // crash-isolation discipline (one bad subscriber must never break every spawn).
+            // Fully qualified: this universe must not name Forge event types in imports
+            // resolved before Forge's transformer chain runs (same constraint as 1.7.10's
+            // LegacyEventPoster indirection).
+            try {
+                net.minecraftforge.event.entity.EntityJoinWorldEvent join =
+                        new net.minecraftforge.event.entity.EntityJoinWorldEvent(entity, this);
+                net.minecraftforge.common.MinecraftForge.EVENT_BUS.post(join);
+                if (join.isCanceled()) {
+                    if (host != null) host.log("ENTITY-DIAG 1165 spawnEntityInWorld cancelled class="
+                            + entity.getClass().getName());
+                    return false;
+                }
+            } catch (Throwable t) {
+                if (host != null) host.log("ENTITY-DIAG 1165 EntityJoinWorldEvent failed (non-fatal): " + t);
             }
             boolean twinned = hostLevel == null || hostLevel.spawnEntity(handle);
             if (host != null) {

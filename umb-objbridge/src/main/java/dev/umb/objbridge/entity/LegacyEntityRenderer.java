@@ -39,7 +39,6 @@ public final class LegacyEntityRenderer extends EntityRenderer<Entity, LegacyEnt
     public LegacyEntityRenderer(EntityRendererProvider.Context context) {
         super(context);
         visuals = LegacyEntityVisual.all();
-        // 26.2 AtlasManager keys atlases by AtlasIds (javap: net.minecraft.data.AtlasIds.BLOCKS), not
         // by texture path: getAtlas(TextureAtlas.LOCATION_BLOCKS) threw "Invalid atlas id:
         // minecraft:textures/atlas/blocks.png", which aborted EVERY resource reload (entity renderers
         // are built inside it) -> all packs dropped -> black client. A renderer constructor must never
@@ -65,7 +64,9 @@ public final class LegacyEntityRenderer extends EntityRenderer<Entity, LegacyEnt
      */
     @Override public boolean shouldRender(Entity entity, net.minecraft.client.renderer.culling.Frustum frustum,
                                           double camX, double camY, double camZ) {
-        Float radius = entity == null ? null : CULL_RADIUS.get(identity(entity));
+        String key = entity == null ? null : identity(entity);
+        // A freshly spawned twin can render before its legacy id syncs; no radius yet.
+        Float radius = key == null ? null : CULL_RADIUS.get(key);
         if (radius == null) return super.shouldRender(entity, frustum, camX, camY, camZ);
         double r = radius.doubleValue();
         return frustum.isVisible(new net.minecraft.world.phys.AABB(entity.getX() - r, entity.getY() - r,

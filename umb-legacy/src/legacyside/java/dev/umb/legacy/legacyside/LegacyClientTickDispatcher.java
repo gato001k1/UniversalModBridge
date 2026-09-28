@@ -56,6 +56,9 @@ import dev.umb.bridge.api.LegacyBridge;
  */
 public final class LegacyClientTickDispatcher {
     private static final int TRACE_FIELD_LIMIT = 48;
+    /** Last time the host drove renderOverlay; the tick path posts RenderTickEvent only when stale. */
+    private static volatile long lastOverlayFrameNanos;
+    private static final long OVERLAY_FRAME_STALE_NANOS = 250_000_000L;
     private static final String SUBSCRIBE_DESC =
             "Lcpw/mods/fml/common/eventhandler/SubscribeEvent;";
     private static final String CLIENT_TICK_DESC =
@@ -172,10 +175,15 @@ public final class LegacyClientTickDispatcher {
                                 : String.valueOf(mcNow.field_71439_g.field_70154_o))
                         + " roots=" + describeRootMinecraft(mcNow));
             }
-            postIsolated(bus, new TickEvent.RenderTickEvent(TickEvent.Phase.START, 0.0F), binding,
-                    playerName, serverPlayer);
-            postIsolated(bus, new TickEvent.RenderTickEvent(TickEvent.Phase.END, 0.0F), binding,
-                    playerName, serverPlayer);
+            // Real Minecraft posts RenderTickEvent once per frame. While the host drives
+            // renderOverlay every frame it posts it there (inside the capture session); when the
+            // HUD seam is idle (off, or not riding) this tick keeps it flowing.
+            if (System.nanoTime() - lastOverlayFrameNanos > OVERLAY_FRAME_STALE_NANOS) {
+                postIsolated(bus, new TickEvent.RenderTickEvent(TickEvent.Phase.START, 0.0F), binding,
+                        playerName, serverPlayer);
+                postIsolated(bus, new TickEvent.RenderTickEvent(TickEvent.Phase.END, 0.0F), binding,
+                        playerName, serverPlayer);
+            }
             postIsolated(bus, new TickEvent.ClientTickEvent(TickEvent.Phase.END), binding,
                     playerName, serverPlayer);
         } catch (Throwable t) {
@@ -214,10 +222,28 @@ public final class LegacyClientTickDispatcher {
      * Renders the generic Forge overlay event stream inside the bounded legacy client facade.
      * The callback is deliberately separate from the host GUI type: only GL-EMU data crosses
      * the class-loader boundary.
+     *
+     * <p>Also posts {@code TickEvent.RenderTickEvent} START/END here (in addition to the
+     * existing {@code RenderGameOverlayEvent} stream): a HUD is not always attached to a Forge
+     * overlay element. Mod client tick handlers commonly draw their HUD from a
+     * {@code RenderTickEvent}, END phase subscription instead. {@link #tick} already posts
+     * this event every host server tick, but outside any capture session, so GL calls made
+     * there are discarded and the mesh misses that HUD's geometry. Posting it again here,
+     * inside the capture scope with the real partial tick, is what captures it; {@link #tick}
+     * posts it only while this path is idle, so it fires once per frame either way. Ordering
+     * matches real Minecraft: START precedes every overlay element, END follows all of them,
+     * so an END-drawn HUD still paints on top.</p>
+     *
+     * <p>Every capture below passes {@code guiAmbientState=true}: the 2D overlay phase in
+     * real Minecraft begins with texturing (and usually blending) already enabled, and
+     * legacy HUD and font code commonly assumes that ambient state instead of enabling it
+     * per quad. Without it, textured quads replay as white boxes and glyphs as color blocks.
+     * The container-GUI path already passes the same flag.</p>
      */
     public static GlEmulationSession.Mesh renderOverlay(EntityPlayer serverPlayer, World serverWorld,
                                                          final float partialTicks, final int width,
                                                          final int height) {
+        lastOverlayFrameNanos = System.nanoTime();
         synchronized (LegacyClientTickDispatcher.class) {
             LegacyClientFacade.Binding binding = LegacyClientFacade.install(serverPlayer, serverWorld);
             ensureRegistered(binding.minecraft);
@@ -236,6 +262,7 @@ public final class LegacyClientTickDispatcher {
                 final String name = playerName;
                 final ScaledResolution resolution = new ScaledResolution(binding.minecraft, width, height);
                 final EventBus bus = MinecraftForge.EVENT_BUS;
+                final EventBus fmlBus = FMLCommonHandler.instance().bus();
                 // The host already renders every vanilla HUD element. Still capture each legacy
                 // event type separately: mods commonly attach vehicle HUDs to CROSSHAIRS,
                 // HOTBAR, or another element rather than ALL. LegacyHudPainter filters the
@@ -243,13 +270,20 @@ public final class LegacyClientTickDispatcher {
                 GlEmulationSession.Mesh result = LegacyRenderCapture.captureOverlay(binding,
                         new Runnable() {
                             @Override public void run() {
+                                // Real Minecraft fires RenderTickEvent(START) before any overlay
+                                // element; a vehicle HUD attached to RenderTickEvent(END) (see
+                                // the method javadoc) must see the same ordering so it still
+                                // paints on top of everything captured below.
+                                postIsolated(fmlBus, new TickEvent.RenderTickEvent(
+                                        TickEvent.Phase.START, partialTicks), binding, name,
+                                        serverPlayer);
                                 RenderGameOverlayEvent all = new RenderGameOverlayEvent(
                                         partialTicks, resolution, 0, 0);
                                 postIsolated(bus, new RenderGameOverlayEvent.Pre(all,
                                         RenderGameOverlayEvent.ElementType.ALL), binding, name,
                                         serverPlayer);
                             }
-                        });
+                        }, true);
                 for (final RenderGameOverlayEvent.ElementType type
                         : RenderGameOverlayEvent.ElementType.values()) {
                     if (type == RenderGameOverlayEvent.ElementType.ALL) continue;
@@ -261,14 +295,14 @@ public final class LegacyClientTickDispatcher {
                                     postIsolated(bus, new RenderGameOverlayEvent.Pre(base, type),
                                             binding, name, serverPlayer);
                                 }
-                            }));
+                            }, true));
                     result = GlEmulationSession.concat(result,
                             LegacyRenderCapture.captureOverlay(binding, new Runnable() {
                                 @Override public void run() {
                                     postIsolated(bus, new RenderGameOverlayEvent.Post(base, type),
                                             binding, name, serverPlayer);
                                 }
-                            }));
+                            }, true));
                 }
                 GlEmulationSession.Mesh postAll = LegacyRenderCapture.captureOverlay(binding,
                         new Runnable() {
@@ -278,8 +312,15 @@ public final class LegacyClientTickDispatcher {
                                 postIsolated(bus, new RenderGameOverlayEvent.Post(all,
                                         RenderGameOverlayEvent.ElementType.ALL), binding, name,
                                         serverPlayer);
+                                // RenderTickEvent(END) is where a vehicle HUD is commonly
+                                // drawn; fire it last so its geometry paints over every
+                                // overlay element captured above, matching real
+                                // Minecraft's frame order.
+                                postIsolated(fmlBus, new TickEvent.RenderTickEvent(
+                                        TickEvent.Phase.END, partialTicks), binding, name,
+                                        serverPlayer);
                             }
-                        });
+                        }, true);
                 return GlEmulationSession.concat(result, postAll);
             } catch (Throwable t) {
                 LegacyInputDiag.log("overlay dispatch failed player=" + playerName + " cause="

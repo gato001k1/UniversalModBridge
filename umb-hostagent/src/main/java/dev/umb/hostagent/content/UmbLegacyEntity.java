@@ -43,8 +43,7 @@ import java.util.Base64;
  * the now-updated fields via the handle's getters and applies them with
  * {@code setPos}/{@code setDeltaMovement}/{@code setYRot}/{@code setXRot} - "legacy computes it,
  * host displays it", the same split the tile bridge uses for block/container state. Host-side
- * collision/physics is NOT pushed back into legacy (a documented, honest gap - see
- * ENTITY-LANE.md).</p>
+ * collision/physics is NOT pushed back into legacy (a documented, honest gap).</p>
  *
  * <h2>Removal, both directions</h2>
  * <p>Legacy-initiated: {@link #baseTick()} notices {@link EntityHandle#isValid()}{@code ==false}
@@ -56,7 +55,7 @@ import java.util.Base64;
  */
 public final class UmbLegacyEntity extends Entity {
 
-    /** 26.2 javap-verified string identity synchronized to the client renderer. */
+    /** String identity synchronized to the client renderer. */
     private static final EntityDataAccessor<String> LEGACY_CLASS_ID =
             SynchedEntityData.defineId(UmbLegacyEntity.class, EntityDataSerializers.STRING);
     /** Legacy seat offset (updateRiderPosition result relative to the entity), synced so the
@@ -64,6 +63,18 @@ public final class UmbLegacyEntity extends Entity {
     private static final EntityDataAccessor<Boolean> HAS_RIDER_OFFSET =
             SynchedEntityData.defineId(UmbLegacyEntity.class, EntityDataSerializers.BOOLEAN);
     private static final EntityDataAccessor<org.joml.Vector3fc> RIDER_OFFSET =
+            SynchedEntityData.defineId(UmbLegacyEntity.class, EntityDataSerializers.VECTOR3);
+    /**
+     * Client aim-box sync: the client twin never holds a legacy handle, so its
+     * box used to stay the 0.5-block builder default while the server twin carried the real
+     * legacy box - and 26.2 aim picking ({@code ProjectileUtil.getEntityHitResult}) tests the
+     * CLIENT box. The server publishes the base box as position-relative data every sync: the
+     * minimum-corner offset plus the size. Offsets stay small (a few blocks) so float precision
+     * is plenty, while the corner itself rides vanilla's full-precision position tracking.
+     */
+    private static final EntityDataAccessor<org.joml.Vector3fc> BOX_MIN_OFFSET =
+            SynchedEntityData.defineId(UmbLegacyEntity.class, EntityDataSerializers.VECTOR3);
+    private static final EntityDataAccessor<org.joml.Vector3fc> BOX_SIZE =
             SynchedEntityData.defineId(UmbLegacyEntity.class, EntityDataSerializers.VECTOR3);
 
     private static final String NBT_KEY = "umb_legacy_nbt";
@@ -79,13 +90,37 @@ public final class UmbLegacyEntity extends Entity {
     private String lastRiderSync;
     private int passengerDiagCount;
     private int riderStopDiagCount;
+    /** Last reconciled part-collider count, for change-only diagnostics below. */
+    private int lastPartCount = -1;
+    /** One-shot client box/pickability report per twin lifetime. */
+    private boolean clientDiagLogged;
+
+    /** One-shot client state per twin: does the client see a real box, and pickable? */
+    private void logClientBoxOnce() {
+        if (clientDiagLogged) {
+            return;
+        }
+        clientDiagLogged = true;
+        try {
+            AABB box = getBoundingBox();
+            AgentLog.line("ENTITY-DIAG twin-client twin=" + getUUID()
+                    + " pos=" + position()
+                    + " box=" + (box == null ? "null"
+                            : box.minX + "," + box.minY + "," + box.minZ
+                            + "->" + box.maxX + "," + box.maxY + "," + box.maxZ)
+                    + " classId=" + legacyClassId()
+                    + " pickable=" + isPickable());
+        } catch (Throwable t) {
+            AgentLog.error("UmbLegacyEntity.logClientBoxOnce", t, 2);
+        }
+    }
 
     private static final int MAX_PASSENGER_DIAG = 12;
     private static final int MAX_RIDER_STOP_DIAG = 8;
     /**
      * Client glide state for server-driven movement. Vanilla {@code LivingEntity} owns one of
      * these and pumps it every client tick; a raw {@code Entity} has none
-     * ({@code getInterpolation()} returns null, javap-verified on 26.2 client.jar), so every
+     * ({@code getInterpolation()} returns null), so every
      * server move packet snaps the client twin to the new position with no glide in between.
      * With the default 3-tick tracking interval that is a ~6.7 Hz teleport stepping the whole
      * rendered vehicle behind its real position. Lazily created (covers Unsafe-allocated
@@ -98,7 +133,7 @@ public final class UmbLegacyEntity extends Entity {
         super(type, level);
         // The legacy entity owns movement.  The generic host twin must not apply 26.2's native
         // gravity between bridge syncs, or aircraft and other legacy movers fall even while the
-        // legacy side is stationary.  setNoGravity is javap-grounded on the 26.2 Entity API.
+        // legacy side is stationary.
         setNoGravity(true);
     }
 
@@ -116,7 +151,7 @@ public final class UmbLegacyEntity extends Entity {
 
     /**
      * Opts the generic twin into 26.2's client interpolation: {@code moveOrInterpolateTo}
-     * (the single path every server move packet funnels through, javap-verified) glides via
+     * (the single path every server move packet funnels through) glides via
      * {@code InterpolationHandler.interpolateTo} when this is non-null and snaps when it is
      * null. The default 3 glide steps match this type's tracking update interval, exactly how
      * vanilla entities smooth 20 Hz server motion into per-frame motion with no extra
@@ -136,7 +171,6 @@ public final class UmbLegacyEntity extends Entity {
      * The native Entity implementation removes a passenger only through this family of methods.
      * Keep the bounded trace on the generic twin so it works for every legacy vehicle and exposes
      * the real caller (ServerLevel passenger validation, player stopRiding, or a legacy callback).
-     * The method names and visibility are javap-verified against 26.2 client.jar.
      */
     @Override
     protected void addPassenger(Entity passenger) {
@@ -161,10 +195,8 @@ public final class UmbLegacyEntity extends Entity {
      * Host-initiated dismount propagation (universal, no mod knowledge). 26.2's own rideTick
      * sneak-dismount calls stopRiding -> removePassenger on this twin without touching the legacy
      * entity; without propagation the legacy rider stays set and the next legacy->host rider sync
-     * re-mounts the player (the live Shift-stuck loop: removePassenger alternating with
-     * syncEntity/startRiding every tick while Shift is held, desired=Player195 in the rider-sync
-     * trace). Running the legacy entity's own dismount logic here - rider mountEntity(null),
-     * 1.7.10 Entity.func_70078_a bytecode-verified to clear both riding links and seat the rider
+     * re-mounts the player. Running the legacy entity's own dismount logic here - rider
+     * mountEntity(null), 1.7.10 Entity.func_70078_a clears both riding links and seats the rider
      * on top of the ex-vehicle (UmbPlayer.mountVanillaEntity is the same body without the
      * EntityPlayerMP network notification) - clears the legacy rider, so the next sync observes
      * desired=null and stays dismounted. ejectPassengers needs no separate handling: vanilla
@@ -187,10 +219,9 @@ public final class UmbLegacyEntity extends Entity {
     }
 
     /**
-     * Pure decision extracted so it is directly unit-testable without a live {@code Level}
-     * (same headless-test gap as {@link #shouldPropagateRemoval} - see ENTITY-LANE.md). True only
-     * for a genuine host-side player removal from a live server twin that has a legacy half to
-     * propagate to.
+     * Pure decision extracted so it is directly unit-testable without a live {@code Level}.
+     * True only for a genuine host-side player removal from a live server twin that has a
+     * legacy half to propagate to.
      */
     static boolean shouldPropagateHostDismount(boolean clientSide, Entity passenger,
             boolean twinRemoved, EntityHandle handle, HostWorldImpl world) {
@@ -245,7 +276,7 @@ public final class UmbLegacyEntity extends Entity {
     }
 
     /**
-     * 26.2 javap-verified ServerLevel field: the native passenger tick path only ticks a non-player
+     * 26.2 ServerLevel field: the native passenger tick path only ticks a non-player
      * passenger when it is in this list, and the entity loop validates vehicle identity separately.
      * The field is private, so this is diagnostics-only reflection; a failure is rendered as an
      * explicit unknown value and can never affect riding semantics.
@@ -283,10 +314,9 @@ public final class UmbLegacyEntity extends Entity {
     }
 
     /** For tests only: {@link #ensureHandle()} is private and normally only reached from
-     *  {@link #baseTick()}, which needs a live {@code Level} this headless suite cannot construct
-     *  (see ENTITY-LANE.md). {@code ensureHandle}'s OWN "not a ServerLevel" early-return does not
-     *  touch {@code level()} beyond an {@code instanceof} check (never throws on a null field), so
-     *  it is safe to call directly - this exposes exactly that call, nothing more. */
+     *  {@link #baseTick()}, which needs a live {@code Level} the test cannot construct.
+     *  {@code ensureHandle} itself only does an {@code instanceof} check (never throws on a
+     *  null field), so it is safe to call directly - this exposes exactly that call. */
     void ensureHandleForTest() {
         ensureHandle();
     }
@@ -296,6 +326,83 @@ public final class UmbLegacyEntity extends Entity {
         builder.define(LEGACY_CLASS_ID, "");
         builder.define(HAS_RIDER_OFFSET, Boolean.FALSE);
         builder.define(RIDER_OFFSET, new org.joml.Vector3f());
+        builder.define(BOX_MIN_OFFSET, new org.joml.Vector3f());
+        builder.define(BOX_SIZE, new org.joml.Vector3f());
+    }
+
+    @Override
+    public void onSyncedDataUpdated(EntityDataAccessor<?> key) {
+        super.onSyncedDataUpdated(key);
+        if (BOX_MIN_OFFSET.equals(key) || BOX_SIZE.equals(key)) {
+            retainClientBox();
+        }
+    }
+
+    /**
+     * Rebuilds the client box from the synced position-relative data. Skips an unsynced twin
+     * (zero size) and any corrupt entry - the vanilla default box stays until real data lands.
+     */
+    private void retainClientBox() {
+        if (entityData == null) {
+            return;
+        }
+        org.joml.Vector3fc minOffset;
+        org.joml.Vector3fc size;
+        try {
+            minOffset = entityData.get(BOX_MIN_OFFSET);
+            size = entityData.get(BOX_SIZE);
+        } catch (Throwable ignored) {
+            return;
+        }
+        double[] box = rebuildBox(getX(), getY(), getZ(), minOffset, size);
+        if (box != null) {
+            setBoundingBox(new AABB(box[0], box[1], box[2], box[3], box[4], box[5]));
+        }
+    }
+
+    /**
+     * Position-relative box encoding shared by the server publish path; directly unit-testable.
+     * Returns {@code {minOffX, minOffY, minOffZ, sizeX, sizeY, sizeZ}} or null when the base box
+     * is unusable - the client then keeps whatever box it already has (honest absence).
+     */
+    static float[] boxOffsets(double[] base, double px, double py, double pz) {
+        if (base == null || base.length != 6) {
+            return null;
+        }
+        for (double value : base) {
+            if (!Double.isFinite(value)) {
+                return null;
+            }
+        }
+        if (base[3] <= base[0] || base[4] <= base[1] || base[5] <= base[2]) {
+            return null;
+        }
+        if (!Double.isFinite(px) || !Double.isFinite(py) || !Double.isFinite(pz)) {
+            return null;
+        }
+        return new float[] {(float) (base[0] - px), (float) (base[1] - py), (float) (base[2] - pz),
+                (float) (base[3] - base[0]), (float) (base[4] - base[1]), (float) (base[5] - base[2])};
+    }
+
+    /** Decodes {@link #boxOffsets} back into a world-space box; null when undecodable. */
+    static double[] rebuildBox(double px, double py, double pz,
+            org.joml.Vector3fc minOffset, org.joml.Vector3fc size) {
+        if (minOffset == null || size == null) {
+            return null;
+        }
+        float ox = minOffset.x();
+        float oy = minOffset.y();
+        float oz = minOffset.z();
+        float dx = size.x();
+        float dy = size.y();
+        float dz = size.z();
+        if (!(dx > 0.0F) || !(dy > 0.0F) || !(dz > 0.0F)
+                || !Float.isFinite(ox) || !Float.isFinite(oy) || !Float.isFinite(oz)
+                || !Float.isFinite(dx) || !Float.isFinite(dy) || !Float.isFinite(dz)
+                || !Double.isFinite(px) || !Double.isFinite(py) || !Double.isFinite(pz)) {
+            return null;
+        }
+        return new double[] {px + ox, py + oy, pz + oz, px + ox + dx, py + oy + dy, pz + oz + dz};
     }
 
     private void setLegacyClassId(String id) {
@@ -329,6 +436,28 @@ public final class UmbLegacyEntity extends Entity {
         return EntityDimensions.scalable(width, height);
     }
 
+    /**
+     * Publishes the base box for client aim picking (see {@link #BOX_MIN_OFFSET}). Server only
+     * in practice; the entityData null-guard keeps headless tests honest. A null encoding (no
+     * usable base box) leaves the last published values alone rather than clearing a good box
+     * with a transiently bad tick.
+     */
+    private void publishClientBox(EntityHandle h) {
+        if (entityData == null) {
+            return;
+        }
+        try {
+            float[] encoded = h == null ? null
+                    : boxOffsets(h.getBoundingBox(), h.getX(), h.getY(), h.getZ());
+            if (encoded == null) {
+                return;
+            }
+            entityData.set(BOX_MIN_OFFSET, new org.joml.Vector3f(encoded[0], encoded[1], encoded[2]));
+            entityData.set(BOX_SIZE, new org.joml.Vector3f(encoded[3], encoded[4], encoded[5]));
+        } catch (Throwable ignored) {
+            // Optional presentation state must never break the tick.
+        }
+    }
     /** Validates the legacy world-space collision box before it reaches the native Entity. */
     static AABB boundsFor(EntityHandle h) {
         if (h == null) return null;
@@ -341,83 +470,144 @@ public final class UmbLegacyEntity extends Entity {
         return new AABB(b[0], b[1], b[2], b[3], b[4], b[5]);
     }
 
-    /** Applies the legacy collision shape after position/dimension updates on every bridge sync. */
+    /** Applies the exact legacy base box after position/dimension updates on every bridge sync. */
     void applyLegacyBounds(EntityHandle h) {
-        AABB bounds = compoundBoundsFor(h);
+        AABB bounds = boundsFor(h);
         if (bounds != null) {
             setBoundingBox(bounds);
         }
     }
 
     /**
-     * Unions the base legacy box with every extra multipart/helper box, or null when nothing is
-     * usable. 26.2 entity-entity collision ({@code EntityGetter.getEntityCollisions},
-     * javap-verified against 26.2 client.jar) contributes exactly one box per entity - the twin's
-     * own {@code getBoundingBox()} - so a legacy vehicle whose body spans many blocks through
-     * part entities or helper-owned boxes (the generic {@code EntityHandle.getCollisionBoxes}
-     * contract) would otherwise stay a 1-block solid core that pushes the player off the rest of
-     * the hull. The union over-covers gaps between disjoint parts; that is strictly closer to the
-     * legacy behaviour (where every part collides) than the small core. Pure and unit-testable.
+     * Extra multipart/helper boxes live on dedicated {@link UmbLegacyPartTwin} children (one box
+     * per child), never unioned into this twin: 26.2 aim picking takes the NEAREST clipped box,
+     * so a union would swallow the aim ray for interior seat twins, while 1.7.10 aims every
+     * world entity by its own small box. Standing still works - movement collision collects one
+     * box per entity across parent, seats and part children alike.
      */
-    static AABB compoundBoundsFor(EntityHandle h) {
-        AABB base = boundsFor(h);
-        java.util.List<double[]> extras;
-        try {
-            extras = h == null ? null : h.getCollisionBoxes();
-        } catch (Throwable ignored) {
-            extras = null;
+    private java.util.List<UmbLegacyPartTwin> partTwins;
+
+    /**
+     * The part-collider children, healed on access: Unsafe-allocated headless instances (tests)
+     * skip field initializers, and every path below must degrade to "no children" instead of
+     * throwing.
+     */
+    private java.util.List<UmbLegacyPartTwin> partTwinList() {
+        if (partTwins == null) {
+            partTwins = new java.util.ArrayList<>();
         }
-        if (extras == null || extras.isEmpty()) {
-            return base;
-        }
-        double minX = base == null ? Double.POSITIVE_INFINITY : base.minX;
-        double minY = base == null ? Double.POSITIVE_INFINITY : base.minY;
-        double minZ = base == null ? Double.POSITIVE_INFINITY : base.minZ;
-        double maxX = base == null ? Double.NEGATIVE_INFINITY : base.maxX;
-        double maxY = base == null ? Double.NEGATIVE_INFINITY : base.maxY;
-        double maxZ = base == null ? Double.NEGATIVE_INFINITY : base.maxZ;
-        boolean any = base != null;
-        for (double[] box : extras) {
-            if (!isUnionable(box)) {
-                continue;
-            }
-            any = true;
-            if (box[0] < minX) minX = box[0];
-            if (box[1] < minY) minY = box[1];
-            if (box[2] < minZ) minZ = box[2];
-            if (box[3] > maxX) maxX = box[3];
-            if (box[4] > maxY) maxY = box[4];
-            if (box[5] > maxZ) maxZ = box[5];
-        }
-        return any ? new AABB(minX, minY, minZ, maxX, maxY, maxZ) : null;
+        return partTwins;
     }
 
-    private static boolean isUnionable(double[] box) {
-        if (box == null || box.length != 6) {
-            return false;
+    /** For tests only. */
+    int partTwinCountForTest() {
+        return partTwinList().size();
+    }
+
+    /**
+     * Reconciles the part-collider children with the handle's current extra boxes, called at the
+     * end of every bridge sync (and once at spawn). Server only: client twins arrive through the
+     * vanilla spawn/tracking packets with their boxes synced as entity data. Children delegate
+     * interaction and damage to this twin, so per-box clicks mount/damage through the legacy
+     * entity exactly like body clicks do. Never throws into the tick.
+     */
+    void syncPartTwins(EntityHandle h) {
+        if (!(level() instanceof ServerLevel serverLevel)) {
+            return;
         }
-        for (double value : box) {
-            if (!Double.isFinite(value)) {
-                return false;
+        try {
+            java.util.List<double[]> extras;
+            try {
+                extras = h == null ? null : h.getCollisionBoxes();
+            } catch (Throwable ignored) {
+                extras = null;
+            }
+            if (extras == null) {
+                extras = java.util.Collections.emptyList();
+            }
+            java.util.List<UmbLegacyPartTwin> twins = partTwinList();
+            for (java.util.Iterator<UmbLegacyPartTwin> it = twins.iterator(); it.hasNext();) {
+                if (it.next().isRemoved()) {
+                    it.remove();
+                }
+            }
+            while (twins.size() > extras.size()) {
+                UmbLegacyPartTwin surplus = twins.remove(twins.size() - 1);
+                if (!surplus.isRemoved()) {
+                    surplus.discard();
+                }
+            }
+            for (int i = 0; i < twins.size(); i++) {
+                twins.get(i).applyBox(extras.get(i));
+            }
+            EntityType<UmbLegacyPartTwin> partType = Registrar.legacyPartType();
+            if (partType == null) {
+                // Registration runs in the pre-freeze window, before any twin can exist; a miss
+                // here is a transient boot edge, retried on the next sync.
+                return;
+            }
+            while (twins.size() < extras.size()) {
+                UmbLegacyPartTwin twin = new UmbLegacyPartTwin(partType, serverLevel);
+                twin.bindParent(this);
+                twin.applyBox(extras.get(twins.size()));
+                if (serverLevel.addFreshEntity(twin)) {
+                    twins.add(twin);
+                } else {
+                    twin.discard();
+                    break;
+                }
+            }
+            if (twins.size() != lastPartCount) {
+                lastPartCount = twins.size();
+                AgentLog.line("ENTITY-DIAG part-twins twin=" + getUUID()
+                        + " class=" + (h == null ? "null" : h.legacyEntityClassName())
+                        + " extras=" + extras.size() + " children=" + twins.size());
+            }
+        } catch (Throwable t) {
+            AgentLog.error("UmbLegacyEntity.syncPartTwins", t, 3);
+        }
+    }
+
+    /** Discards every part-collider child; called from {@link #onRemoval} on both sides. */
+    private void discardPartTwins() {
+        for (UmbLegacyPartTwin twin : partTwinList()) {
+            try {
+                if (!twin.isRemoved()) {
+                    twin.discard();
+                }
+            } catch (Throwable ignored) {
+                // Removal must remain best-effort on both sides.
             }
         }
-        return box[3] >= box[0] && box[4] >= box[1] && box[5] >= box[2];
+        partTwinList().clear();
     }
 
     @Override
     public boolean isPickable() {
+        // The client twin never holds a legacy handle (only the server binds one), so a
+        // handle-only check made every legacy vehicle unclickable for a real player: the
+        // client never aimed at it and never sent the interact packet. The server still
+        // decides via the legacy entity when the interaction arrives.
+        if (level().isClientSide()) {
+            return !isRemoved() && !legacyClassId().isEmpty();
+        }
+        return legacyCollidable();
+    }
+
+    /** Server-side collidability shared with part-collider children (no level access). */
+    boolean legacyCollidable() {
         EntityHandle h = handle;
         return !isRemoved() && h != null && h.isValid() && h.canBeCollidedWith();
     }
 
     @Override
     public boolean isPushable() {
-        return isPickable();
+        return legacyCollidable();
     }
 
     @Override
     public boolean canBeCollidedWith(Entity other) {
-        return isPickable();
+        return legacyCollidable();
     }
 
     @Override
@@ -524,6 +714,10 @@ public final class UmbLegacyEntity extends Entity {
             } catch (Throwable ignored) {
                 // Client presentation must never break the render tick.
             }
+            // Moving rebuilds the box from the handle-less default dimensions; put the synced
+            // legacy box back so aim and collision keep the real size (same as part twins).
+            retainClientBox();
+            logClientBoxOnce();
             return;
         }
         if (poisoned) {
@@ -557,6 +751,7 @@ public final class UmbLegacyEntity extends Entity {
         setPos(h.getX(), h.getY(), h.getZ());
         refreshDimensions();
         applyLegacyBounds(h);
+        publishClientBox(h);
         setDeltaMovement(h.getMotionX(), h.getMotionY(), h.getMotionZ());
         setYRot(h.getYaw());
         setXRot(h.getPitch());
@@ -566,6 +761,7 @@ public final class UmbLegacyEntity extends Entity {
             syncLegacyRider(h, false);
         }
         syncRiderOffset(h);
+        syncPartTwins(h);
     }
 
     private void syncRiderOffset(EntityHandle h) {
@@ -693,6 +889,7 @@ public final class UmbLegacyEntity extends Entity {
 
     @Override
     public void onRemoval(RemovalReason reason) {
+        discardPartTwins();
         invalidateRenderCapture();
         super.onRemoval(reason);
         HostWorldImpl w = owner;
@@ -726,8 +923,8 @@ public final class UmbLegacyEntity extends Entity {
 
     /**
      * Pure decision extracted so it is directly unit-testable without a live {@code Level}
-     * (constructing/discarding a real {@code Entity} needs one - see ENTITY-LANE.md's headless-test
-     * gap). True only for a genuine host-initiated kill/discard that did NOT originate from this
+     * (constructing/discarding a real {@code Entity} needs one). True only
+     * for a genuine host-initiated kill/discard that did NOT originate from this
      * twin noticing the legacy entity was already dead.
      */
     static boolean shouldPropagateRemoval(boolean legacyInitiatedRemoval, RemovalReason reason) {

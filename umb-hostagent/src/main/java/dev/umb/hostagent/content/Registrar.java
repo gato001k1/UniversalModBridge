@@ -270,6 +270,43 @@ public final class Registrar {
             AgentLog.loud("UMB-HOSTAGENT FAILED registering EntityType: " + t);
             AgentLog.error("Registrar.registerLegacyEntityType", t, 6);
         }
+        registerLegacyPartType();
+    }
+
+    /** One shared, namespace-independent type for every {@link UmbLegacyPartTwin}. */
+    public static volatile EntityType<UmbLegacyPartTwin> LEGACY_PART_TYPE;
+
+    /**
+     * Part-collider type: pure host-side collision/aim boxes, one per legacy extra
+     * box. Never persisted (the parent re-creates children from live legacy boxes
+     * every sync) and never a spawn-egg/command target; tracked per tick so client
+     * aim boxes follow fast vehicles. Idempotent; safe to call from every namespace
+     * registration.
+     */
+    public static void registerLegacyPartType() {
+        if (LEGACY_PART_TYPE != null) return;
+        try {
+            Identifier id = Identifier.fromNamespaceAndPath("umb", "legacy_part");
+            ResourceKey<EntityType<?>> key = ResourceKey.create(Registries.ENTITY_TYPE, id);
+            EntityType<UmbLegacyPartTwin> type = EntityType.Builder
+                    .<UmbLegacyPartTwin>of(UmbLegacyPartTwin::new, MobCategory.MISC)
+                    .sized(0.5F, 0.5F)
+                    .clientTrackingRange(8)
+                    .updateInterval(1)
+                    .noSave()
+                    .noSummon()
+                    .build(key);
+            Registry.register(BuiltInRegistries.ENTITY_TYPE, key, type);
+            LEGACY_PART_TYPE = type;
+            AgentLog.loud("PATCHED EntityType registered: " + id);
+        } catch (Throwable t) {
+            AgentLog.loud("UMB-HOSTAGENT FAILED registering part EntityType: " + t);
+            AgentLog.error("Registrar.registerLegacyPartType", t, 6);
+        }
+    }
+
+    static EntityType<UmbLegacyPartTwin> legacyPartType() {
+        return LEGACY_PART_TYPE;
     }
 
     static EntityType<UmbLegacyEntity> entityTypeFor(String namespace) {

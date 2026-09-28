@@ -47,7 +47,7 @@ public interface HostPlayer {
     void      setInventorySlot(int i, StackData s);
     int       getInventorySize();
 
-    // TICK/: motion + damage, so entity-contact dispatches have a real effect
+    // ---- TICK/CONTACT lane: motion + damage, so entity-contact dispatches have a real effect ----
 
     /** Host-side motion (26.2 deltaMovement), read to seed the legacy facade's motionX/Y/Z
      *  (field_70159_w/field_70181_x/field_70179_y) before an entity-contact dispatch. */
@@ -66,7 +66,7 @@ public interface HostPlayer {
      *  never silently no-op - a gas that runs its code but deals no damage is a faked value. */
     void hurt(String legacyDamageType, float amount);
 
-    // look rotation, so look-dependent legacy code (getLook/raytrace
+    // ---- mcheli-vehicles lane: look rotation, so look-dependent legacy code (getLook/raytrace
     //      for vehicle placement, thrown items, bows, buckets) aims where the player aims ----
 
     /** Host look yaw in degrees. 26.2 YRot; identical scale/orientation to 1.7.10's
@@ -81,8 +81,8 @@ public interface HostPlayer {
         return 0.0F;
     }
 
-    // selected hotbar slot, so server/client selection divergence
-    // can be read instead of matched by fallback
+    // ---- automation lane: selected hotbar slot, so server/client selection divergence
+    //      (input-lane round 13) can be read instead of matched by fallback ----
 
     /** Selected hotbar slot 0-8, or -1 when the host cannot read it (never a fabricated
      *  slot: -1 matches nothing, so callers fall back instead of acting on slot 0). */

@@ -140,7 +140,13 @@ public final class UmbClientWorld extends WorldClient {
     private TileEntity copyTile(TileEntity source) {
         if (source == null) return null;
         try {
-            TileEntity target = UmbUnsafe.allocate(source.getClass());
+            // Prefer the real no-arg constructor (same rule as the presentation pass): an
+            // Unsafe-only twin never runs its constructor, so constructor-created helpers
+            // (inventory slot arrays and the like) stay null, and every later NBT re-read
+            // that sizes state from those helpers throws before assigning anything - leaving
+            // inventory-reading GUIs frozen on empty overlays forever. The allocation fallback
+            // inside construct() covers tiles whose constructor cannot run headless.
+            TileEntity target = LegacyClientTilePresenter.construct(source);
             target.func_145834_a(this);
             target.field_145851_c = source.field_145851_c;
             target.field_145848_d = source.field_145848_d;

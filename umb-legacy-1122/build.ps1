@@ -58,6 +58,15 @@ $pack200Classes = Join-Path $build 'classes-pack200'
 if (Test-Path $pack200Classes) { Remove-Item -Recurse -Force $pack200Classes }
 New-Item -ItemType Directory -Force $pack200Classes | Out-Null
 $pack200Sources = Get-ChildItem -Recurse -Filter *.java $pack200Src | ForEach-Object { $_.FullName }
+# The bridge-api here is a build-time copy of the canonical umb-legacy source (byte-identical,
+# checked by BridgeApiMirrorTest). Change the contract there, never in this module.
+$canonicalApi = Join-Path (Split-Path -Parent $mod) 'umb-legacy\src\bridge-api\java\dev\umb\bridge\api'
+$mirrorApi = Join-Path $mod 'src\bridge-api\java\dev\umb\bridge\api'
+if (-not (Test-Path $canonicalApi)) { Write-Error ("missing canonical bridge-api: " + $canonicalApi); exit 1 }
+New-Item -ItemType Directory -Force $mirrorApi | Out-Null
+Get-ChildItem -Path $canonicalApi -Filter *.java | ForEach-Object {
+  Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $mirrorApi $_.Name) -Force
+}
 & $javac -nowarn -encoding UTF-8 --patch-module ("java.base=" + $pack200Src) -d $pack200Classes $pack200Sources
 if ($LASTEXITCODE -ne 0) { Write-Error 'javac failed for pack200 shim'; exit 1 }
 MakeJar $pack200Classes (Join-Path $build 'umb-legacy1122-pack200.jar')

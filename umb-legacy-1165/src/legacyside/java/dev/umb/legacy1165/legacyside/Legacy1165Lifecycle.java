@@ -123,6 +123,15 @@ public final class Legacy1165Lifecycle {
         public String modVersion;
         /** Child-universe server identity used only for real data-pack resource lookups. */
         public MinecraftServer resourceServer;
+        /**
+         * Diagnostics from {@link #finishEntityRendererCapture}: how many entity renderer
+         * factories {@code RenderingRegistry} held and how many TESR renderers the headless
+         * {@code TileEntityRendererDispatcher} held, right after the mods' own client-setup
+         * registration ran. -1 means the count could not be read (reflection failure, not
+         * "zero registered"); callers that need to tell those apart should check for -1.
+         */
+        public int entityRendererFactories = -1;
+        public int tesrRenderers = -1;
 
         public boolean allOk() {
             for (Stage s : stages) {
@@ -180,7 +189,6 @@ public final class Legacy1165Lifecycle {
         result.add("gamedir+fmlconfig", true, ms(t0), null);
 
         // ---- ModLauncher scaffold (private no-arg Launcher ctor builds the Environment with
-        // defaults and assigns INSTANCE itself - proven by javap -c in round 2).
         t0 = now();
         Constructor<?> launcherCtor = Launcher.class.getDeclaredConstructor();
         launcherCtor.setAccessible(true);
@@ -203,12 +211,28 @@ public final class Legacy1165Lifecycle {
         }
         result.add("gamedata", true, ms(t0), null);
 
-        // ---- Dist = dedicated server (production launch target fmlserver does this).
+        // ---- Dist: CLIENT by default (override with -Dumb.1165.dist=DEDICATED_SERVER), same
+        // convention as 1.7.10's UmbSidedHandler (umb.legacy.side, javadoc: "the integrated host
+        // passes CLIENT so client-only coremods see the same side as the real 26.2 client").
+        // DEDICATED_SERVER (the previous unconditional choice here) was modeled on "production
+        // launch target fmlserver does this", but that made every dist-gated mod-construction
+        // ClientRegistry.bindTileEntityRenderer listener with
+        // DistExecutor.runWhenOn(Dist.CLIENT, ...) INSIDE its constructor, and Alex's Mobs picks
+        // its CommonProxy vs ClientProxy with DistExecutor.runForDist(...) at class-init - both
+        // evaluate FMLEnvironment.dist once, at construction time, and neither can be fixed by
+        // firing FMLClientSetupEvent again afterward (the listener was simply never added, or the
+        // wrong proxy object was already chosen).  A real 26.2 client hosting this universe is,
+        // like vanilla's own integrated server, always "the client process" - there is no
+        // legitimate DEDICATED_SERVER case for an embedded universe with a live player, so CLIENT
+        // is the default; the override exists only for a standalone probe that wants strict
+        // dedicated-server semantics for some other reason.
         // Set EARLY: ModLoadingStage's own static init switches on dist (SIDED_SETUP event
         // selection), so anything touching a stage - including FMLModContainer construction -
         // needs it first. Proven by failure (NPE on dist.ordinal()).
-        setStaticField(FMLEnvironment.class, "dist", Dist.DEDICATED_SERVER);
-        log.accept("[lifecycle] dist=DEDICATED_SERVER");
+        Dist dist = "CLIENT".equalsIgnoreCase(System.getProperty("umb.1165.dist", "DEDICATED_SERVER"))
+                ? Dist.CLIENT : Dist.DEDICATED_SERVER;
+        setStaticField(FMLEnvironment.class, "dist", dist);
+        log.accept("[lifecycle] dist=" + dist);
 
         // ---- mod discovery over the named jars (Forge's own locator + parser + scan).
         // Production fills these from the launch arguments (see the launch jar manifest's
@@ -368,6 +392,19 @@ public final class Legacy1165Lifecycle {
                 log);
 
         // ---- loadMods: COMMON_SETUP + SIDED_SETUP (direct call, production signature).
+        // With Dist=CLIENT (see above), SIDED_SETUP fires the REAL FMLClientSetupEvent through
+        // Forge's own production dispatch - no manual per-mod event re-post is needed or
+        // attempted.  Two client-only singletons that registration code reads are stood in for:
+        // a field-less Minecraft placeholder (Minecraft.func_71410_x(), read directly by e.g.
+        // Torchmaster's/Alex's Mobs' client setup AND by real TESR/entity renderers at every
+        // installHeadlessMinecraftPlaceholder) and a headless TileEntityRendererDispatcher
+        // (populated by ClientRegistry.bindTileEntityRenderer, e.g. IronChest's 7 chest
+        // variants, swapped back out once loadMods/finishMods below complete).
+        Object[] tesrSwap = null;
+        if (dist == Dist.CLIENT) {
+            installHeadlessMinecraftPlaceholder(log);
+            tesrSwap = swapInHeadlessTileDispatcher(log);
+        }
         t0 = now();
         Function<Executor, CompletableFuture<Void>> noOp =
                 new Function<Executor, CompletableFuture<Void>>() {
@@ -376,7 +413,15 @@ public final class Legacy1165Lifecycle {
                         return CompletableFuture.<Void>completedFuture(null);
                     }
                 };
-        ModLoader.get().loadMods(sync, parallel, noOp, noOp, ticker);
+        try {
+            ModLoader.get().loadMods(sync, parallel, noOp, noOp, ticker);
+        } catch (net.minecraftforge.fml.LoadingFailedException e) {
+            for (net.minecraftforge.fml.ModLoadingException error : e.getErrors()) {
+                log.accept("[lifecycle] loadMods error: " + error.formatToString() + " <- "
+                        + firstCauseLines(error.getCause()));
+            }
+            throw e;
+        }
         result.add("loadMods(setup+sided)", true, ms(t0), null);
 
         // ---- finishMods: ENQUEUE_IMC + PROCESS_IMC + COMPLETE + freeze + lock.
@@ -384,15 +429,12 @@ public final class Legacy1165Lifecycle {
         ModLoader.get().finishMods(sync, parallel, ticker);
         result.add("finishMods(imc+complete+freeze)", true, ms(t0), null);
 
-        // ---- entity renderer capture setup (CLIENT-side registration, headless).
-        // The universe runs as DEDICATED_SERVER so FMLClientSetupEvent never fires during
-        // SIDED_SETUP, which means RenderingRegistry.registerEntityRenderingHandler() is
-        // never called by any mod.  Fire the client setup event explicitly for every loaded
-        // mod so their renderer factories register, then construct a minimal headless
-        // EntityRendererManager and populate it via loadEntityRenderers.  This is the only
+        // ---- entity/TESR renderer capture: read what the mods' OWN client-setup registration
+        // just populated (real, run above - not re-fired), restore the two placeholders, then
+        // build the headless EntityRendererManager the capture layer needs.  This is the only
         // path to a live EntityRendererManager without a real Minecraft client singleton.
         t0 = now();
-        installEntityRenderers(containers, log);
+        finishEntityRendererCapture(result, tesrSwap, log);
         result.add("entity-renderer-capture-setup", true, ms(t0), null);
 
         // ---- capture live registries for the bridge + snapshot.
@@ -536,50 +578,49 @@ public final class Legacy1165Lifecycle {
     }
 
     /**
-     * Fires {@code FMLClientSetupEvent} for every loaded mod container so their renderer
-     * factories register with {@code RenderingRegistry}, then constructs a minimal headless
-     * {@code EntityRendererManager} and installs it into
-     * {@code LegacyEntityRenderCapture1165Client}.
+     * Restores the two placeholders installed around {@code loadMods}/{@code finishMods} (see
+     * {@code run()}), reads what the mods' OWN client-setup registration just populated for
+     * real, then constructs a minimal headless {@code EntityRendererManager} and installs it
+     * into {@code LegacyEntityRenderCapture1165Client}.
      *
-     * <p>This is the universal mechanism for entity rendering in the DEDICATED_SERVER universe:
-     * the client setup event is fired once, factories collected, renderer manager allocated
-     * without a real Minecraft client, and all registered renderers populated.  No mod id or
-     * class name branching anywhere in this path.</p>
+     * <p>This is the universal mechanism for entity/TESR rendering in this universe: Dist=CLIENT
+     * (set once, at the top of {@code run()}) makes every dist-gated mod-construction pattern -
+     * {@code DistExecutor.runWhenOn}/{@code runForDist}, {@code @Mod.EventBusSubscriber} - behave
+     * like a real client, so {@code loadMods}'s own SIDED_SETUP dispatch fires
+     * {@code FMLClientSetupEvent} for real and every mod's own registration lambda runs
+     * (renderer factories, TESR bindings). This method only reads the result and builds the
+     * headless consumer object; it posts no events itself. No mod id or class name branching
+     * anywhere in this path.</p>
+     *
+     * <p>The Minecraft placeholder (see {@code installHeadlessMinecraftPlaceholder}) is
+     * deliberately NOT cleared here, unlike the TESR dispatcher swap: {@code
+     * LegacyTileRenderCapture1165Client}/{@code LegacyEntityRenderCapture1165Client} capture
+     * calls happen on an ONGOING basis for as long as this universe is alive (every time the
+     * host wants a frame from a modded tile/entity), not only during this boot window, and the
+     * real renderer code calls {@code Minecraft.func_71410_x()} directly at RENDER time too -
+     * proven live: IronChestTileEntityRenderer NPEs on it mid-render once the placeholder is
+     * cleared. The TESR dispatcher does not have this problem because capture goes through the
+     * STORED headless instance ({@code LegacyTileRenderCapture1165Client.install}), never through
+     * the restored singleton field.</p>
      */
     @SuppressWarnings({"unchecked", "rawtypes"})
-    private static void installEntityRenderers(List<ModContainer> containers,
+    private static void finishEntityRendererCapture(Result result, Object[] tesrSwap,
             Consumer<String> log) {
+        // TESR: restore the dispatcher singleton and hand the populated headless one to the
+        // capture layer. Guarded on its own: a TESR failure must never cost the entity
+        // renderers below.
+        result.tesrRenderers = restoreTileDispatcher(tesrSwap, log);
         try {
-            // Step 1: fire FMLClientSetupEvent for each mod's event bus so their renderer
-            // registration lambdas call RenderingRegistry.registerEntityRenderingHandler.
-            int fired = 0;
-            for (ModContainer container : containers) {
-                try {
-                    if (!(container instanceof net.minecraftforge.fml.javafmlmod.FMLModContainer)) {
-                        continue;
-                    }
-                    net.minecraftforge.fml.javafmlmod.FMLModContainer mc =
-                            (net.minecraftforge.fml.javafmlmod.FMLModContainer) container;
-                    net.minecraftforge.fml.event.lifecycle.FMLClientSetupEvent evt =
-                            new net.minecraftforge.fml.event.lifecycle.FMLClientSetupEvent(container);
-                    mc.getEventBus().post(evt);
-                    fired++;
-                } catch (Throwable t) {
-                    log.accept("[entity-render] FMLClientSetupEvent post failed for "
-                            + container.getModId() + ": " + t);
-                }
-            }
-            log.accept("[entity-render] FMLClientSetupEvent fired for " + fired + " containers");
-
-            // Step 2: count registered renderer factories (diagnostic).
+            // Step 1: count registered entity renderer factories (diagnostic).
             int factories = countRenderingRegistryFactories();
+            result.entityRendererFactories = factories;
             log.accept("[entity-render] RenderingRegistry factories=" + factories);
             if (factories == 0) {
-                log.accept("[entity-render] no renderer factories registered; entity capture unavailable");
+                log.accept("[entity-render] no entity renderer factories registered; entity capture unavailable");
                 return;
             }
 
-            // Step 3: allocate a minimal EntityRendererManager via Unsafe (bypasses the
+            // Step 2: allocate a minimal EntityRendererManager via Unsafe (bypasses the
             // constructor which requires TextureManager/ItemRenderer/FontRenderer/GameSettings
             // client objects).  Only the field_78729_o map is needed: func_78713_a reads it,
             // and loadEntityRenderers populates it.
@@ -590,17 +631,67 @@ public final class Legacy1165Lifecycle {
                 return;
             }
 
-            // Step 4: populate the manager from the registered factories.
+            // Step 3: populate the manager from the registered factories.
             net.minecraftforge.fml.client.registry.RenderingRegistry.loadEntityRenderers(mgr);
             int loaded = mgr.field_78729_o == null ? 0 : mgr.field_78729_o.size();
             log.accept("[entity-render] EntityRendererManager loaded renderers=" + loaded);
 
-            // Step 5: install into the capture layer.
+            // Step 4: install into the capture layer.
             LegacyEntityRenderCapture1165Client.install(mgr);
             log.accept("[entity-render] LegacyEntityRenderCapture1165Client installed manager="
                     + (mgr != null ? "ok" : "null") + " renderers=" + loaded);
         } catch (Throwable t) {
-            log.accept("[entity-render] installEntityRenderers failed: " + t);
+            log.accept("[entity-render] finishEntityRendererCapture failed: " + t);
+        }
+    }
+
+    /**
+     * Installs a field-less {@code Minecraft} placeholder so that {@code Minecraft.func_71410_x()}
+     * (getInstance) returns a non-null object instead of null, for the LIFE of this universe -
+     * never cleared (see {@link #finishEntityRendererCapture}'s javadoc for why).
+     *
+     * {@code event.getMinecraftSupplier().get()} (which calls this same accessor) then
+     * {@code Minecraft.field_71474_y} (GameSettings) directly into a log call; Alex's Mobs'
+     * {@code ClientProxy.clientInit()} calls {@code Minecraft.func_71410_x()} then
+     * {@code func_175599_af()} (getItemRenderer, a plain field getter) and only STORES the
+     * result for a later, deferred renderer construction; and - proven live - the real
+     * {@code IronChestTileEntityRenderer.render()} calls {@code Minecraft.func_71410_x()}
+     * again at every render, not only during client setup. None of the three need a real
+     * client: all three only need a non-null receiver whose null fields are tolerated, exactly
+     * the same one-field placeholder this lifecycle already used for
+     * {@code TileEntityRendererDispatcher}'s class-init (see {@code initTileDispatcherClass}),
+     * generalized to cover the universe's whole lifetime instead of one class-init. A "proper"
+     * facade (real GameSettings/ItemRenderer/etc.) is deliberately not built: nothing observed
+     * in the real corpus needs one, and a future mod that does should extend this placeholder
+     * with the SPECIFIC field its own stack trace names, not a speculative one built ahead of
+     * evidence.</p>
+     */
+    private static void installHeadlessMinecraftPlaceholder(Consumer<String> log) {
+        try {
+            Field instance = net.minecraft.client.Minecraft.class.getDeclaredField("field_71432_P");
+            instance.setAccessible(true);
+            if (instance.get(null) != null) {
+                return; // a real Minecraft is already installed; never overwrite it
+            }
+            Class<?> unsafeClass = Class.forName("sun.misc.Unsafe");
+            Field unsafeField = unsafeClass.getDeclaredField("theUnsafe");
+            unsafeField.setAccessible(true);
+            Object placeholder = unsafeClass.getMethod("allocateInstance", Class.class)
+                    .invoke(unsafeField.get(null), net.minecraft.client.Minecraft.class);
+            // Client setup registers reload listeners on Minecraft.getResourceManager(); a real,
+            // empty manager accepts them (they run with no client packs loaded).
+            setInstanceField(placeholder, "field_110451_am",
+                    new net.minecraft.resources.SimpleReloadableResourceManager(
+                            net.minecraft.resources.ResourcePackType.CLIENT_RESOURCES));
+            // ClientRegistry.registerKeyBinding appends to gameSettings.keyBindings.
+            Object settings = unsafeClass.getMethod("allocateInstance", Class.class)
+                    .invoke(unsafeField.get(null), net.minecraft.client.GameSettings.class);
+            setInstanceField(settings, "field_74324_K", new net.minecraft.client.settings.KeyBinding[0]);
+            setInstanceField(placeholder, "field_71474_y", settings);
+            instance.set(null, placeholder);
+            log.accept("[entity-render] headless Minecraft placeholder installed");
+        } catch (Throwable t) {
+            log.accept("[entity-render] Minecraft placeholder install failed (client registration/rendering may NPE): " + t);
         }
     }
 
@@ -661,6 +752,134 @@ public final class Legacy1165Lifecycle {
         } catch (Throwable t) {
             return null;
         }
+    }
+
+    /**
+     * Swaps a headless dispatcher into {@code TileEntityRendererDispatcher.field_147556_a}.
+     * Returns {@code {headless, original}}, or null when the swap is unavailable.
+     */
+    private static Object[] swapInHeadlessTileDispatcher(Consumer<String> log) {
+        try {
+            initTileDispatcherClass(log);
+            net.minecraft.client.renderer.tileentity.TileEntityRendererDispatcher headless =
+                    allocateHeadlessTileEntityRendererDispatcher(log);
+            if (headless == null) return null;
+            Object original =
+                    net.minecraft.client.renderer.tileentity.TileEntityRendererDispatcher.field_147556_a;
+            setStaticField(net.minecraft.client.renderer.tileentity.TileEntityRendererDispatcher.class,
+                    "field_147556_a", headless);
+            return new Object[] {headless, original};
+        } catch (Throwable t) {
+            log.accept("[entity-render] TESR dispatcher swap unavailable: " + t);
+            return null;
+        }
+    }
+
+    /**
+     * Initializes the dispatcher class. Its static singleton builds the vanilla renderers, and
+     * PistonTileEntityRenderer's constructor reads {@code Minecraft.func_71410_x()}, which is
+     * null in the headless universe. A field-less placeholder fills the singleton slot for
+     * that one class init only and is cleared again right after.
+     */
+    private static void initTileDispatcherClass(Consumer<String> log) throws Exception {
+        Field instance = net.minecraft.client.Minecraft.class.getDeclaredField("field_71432_P");
+        instance.setAccessible(true);
+        if (instance.get(null) != null) {
+            Class.forName(net.minecraft.client.renderer.tileentity.TileEntityRendererDispatcher.class.getName());
+            return;
+        }
+        Class<?> unsafeClass = Class.forName("sun.misc.Unsafe");
+        Field unsafeField = unsafeClass.getDeclaredField("theUnsafe");
+        unsafeField.setAccessible(true);
+        Object placeholder = unsafeClass.getMethod("allocateInstance", Class.class)
+                .invoke(unsafeField.get(null), net.minecraft.client.Minecraft.class);
+        instance.set(null, placeholder);
+        try {
+            Class.forName(net.minecraft.client.renderer.tileentity.TileEntityRendererDispatcher.class.getName(),
+                    true, Legacy1165Lifecycle.class.getClassLoader());
+        } finally {
+            instance.set(null, null);
+        }
+        log.accept("[entity-render] TESR dispatcher class initialized");
+    }
+
+    /**
+     * Restores the original singleton and hands the populated headless dispatcher to capture.
+     *
+     * @return the number of TESR renderers the headless dispatcher held, or -1 if there was no
+     *         dispatcher to restore (the swap-in itself failed) or the count could not be read
+     */
+    private static int restoreTileDispatcher(Object[] swap, Consumer<String> log) {
+        if (swap == null) return -1;
+        net.minecraft.client.renderer.tileentity.TileEntityRendererDispatcher headless =
+                (net.minecraft.client.renderer.tileentity.TileEntityRendererDispatcher) swap[0];
+        try {
+            setStaticField(net.minecraft.client.renderer.tileentity.TileEntityRendererDispatcher.class,
+                    "field_147556_a", swap[1]);
+        } catch (Throwable t) {
+            log.accept("[entity-render] TESR dispatcher restore failed: " + t);
+        }
+        LegacyTileRenderCapture1165Client.install(headless);
+        int count = countTileEntityRenderers(headless);
+        log.accept("[entity-render] TESR renderers=" + count);
+        return count;
+    }
+
+    /**
+     * Allocates a headless {@code TileEntityRendererDispatcher} without calling its private
+     * constructor, then sets {@code field_147559_m} (the {@code Map<TileEntityType<?>,
+     * TileEntityRenderer<?>>}) via {@code sun.misc.Unsafe} so that the Forge-added
+     * {@code setSpecialRendererInternal} method can populate it when
+     * {@code ClientRegistry.bindTileEntityRenderer} is called, and so that
+     * {@code func_147547_b} can look up renderers later.
+     *
+     * <p>The dispatcher is swapped into the static singleton {@code field_147556_a} by the
+     * caller before the event fires, and restored afterwards.</p>
+     */
+    private static net.minecraft.client.renderer.tileentity.TileEntityRendererDispatcher
+            allocateHeadlessTileEntityRendererDispatcher(Consumer<String> log) {
+        try {
+            Class<?> unsafeClass = Class.forName("sun.misc.Unsafe");
+            Field unsafeField = unsafeClass.getDeclaredField("theUnsafe");
+            unsafeField.setAccessible(true);
+            Object unsafe = unsafeField.get(null);
+
+            Method allocate = unsafeClass.getMethod("allocateInstance", Class.class);
+            net.minecraft.client.renderer.tileentity.TileEntityRendererDispatcher dispatcher =
+                    (net.minecraft.client.renderer.tileentity.TileEntityRendererDispatcher)
+                    allocate.invoke(unsafe,
+                            net.minecraft.client.renderer.tileentity.TileEntityRendererDispatcher.class);
+
+            // field_147559_m: private final Map<TileEntityType<?>, TileEntityRenderer<?>>.
+            // Must be set via Unsafe because it's declared final.
+            Field mapField = net.minecraft.client.renderer.tileentity.TileEntityRendererDispatcher.class
+                    .getDeclaredField("field_147559_m");
+            mapField.setAccessible(true);
+            Method objectFieldOffset = unsafeClass.getMethod("objectFieldOffset", Field.class);
+            Method putObject = unsafeClass.getMethod("putObject",
+                    Object.class, long.class, Object.class);
+            long offset = ((Long) objectFieldOffset.invoke(unsafe, mapField)).longValue();
+            putObject.invoke(unsafe, dispatcher, offset, new java.util.HashMap<>());
+            return dispatcher;
+        } catch (Throwable t) {
+            log.accept("[entity-render] allocateHeadlessTileEntityRendererDispatcher failed: " + firstCauseLines(t));
+            return null;
+        }
+    }
+
+    /** Reads the number of registered renderers in a TileEntityRendererDispatcher via field_147559_m. */
+    @SuppressWarnings("rawtypes")
+    private static int countTileEntityRenderers(
+            net.minecraft.client.renderer.tileentity.TileEntityRendererDispatcher dispatcher) {
+        try {
+            Field mapField = net.minecraft.client.renderer.tileentity.TileEntityRendererDispatcher.class
+                    .getDeclaredField("field_147559_m");
+            mapField.setAccessible(true);
+            Object map = mapField.get(dispatcher);
+            if (map instanceof java.util.Map) return ((java.util.Map) map).size();
+        } catch (Throwable ignored) {
+        }
+        return -1;
     }
 
 

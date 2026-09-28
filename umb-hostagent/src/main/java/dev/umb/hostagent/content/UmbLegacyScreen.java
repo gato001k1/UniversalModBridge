@@ -65,6 +65,7 @@ import net.minecraft.world.inventory.Slot;
  * needs the real per-index "is this one meaningful" descriptor the placeholder API does not carry.</p>
  */
 public final class UmbLegacyScreen extends AbstractContainerScreen<UmbLegacyMenu> {
+    private int lastLoggedDraws = -1;
 
     private static final int TEXTURE_SIZE = 256;
     private static final int SLOT_COLOR = 0xFF8B8B8B;
@@ -171,7 +172,9 @@ public final class UmbLegacyScreen extends AbstractContainerScreen<UmbLegacyMenu
             if (legacyMesh != null) {
                 int painted = LegacyGuiPainter.paint(g, legacyMesh, leftPos, topPos,
                         imageWidth, imageHeight);
-                if (painted > 0) {
+                // Painted every frame; log only when the mesh changes, not 60 times a second.
+                if (painted > 0 && painted != lastLoggedDraws) {
+                    lastLoggedDraws = painted;
                     AgentLog.line("[UMB-GUI] legacy mesh draws=" + painted
                             + " vertices=" + legacyMesh.vertexCount());
                 }

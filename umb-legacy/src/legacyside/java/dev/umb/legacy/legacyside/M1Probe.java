@@ -90,6 +90,33 @@ public final class M1Probe {
         handle.close();
         report.append("close: ok\n");
 
+        // Prove hasItemRenderer against a real mod item from this same staged HBM jar.
+        // Item-renderer registration is client-proxy init code, which never runs on a bare
+        // boot; a few client ticks give the discovery pass the same chance to run it that
+        // a live game's first rendered frames have. Armor boots carry a real IItemRenderer
+        // (checked for INVENTORY, the render type every custom-rendered item needs); a
+        // plain stick must never report one.
+        FakeHostWorld clientWorld = new FakeHostWorld();
+        UmbWorld tickWorld = UmbWorld.create(clientWorld, 0);
+        UmbPlayer tickPlayer = UmbPlayer.create(tickWorld, new FakeHostPlayer());
+        for (int i = 0; i < 5; i++) {
+            LegacyClientTickDispatcher.tick(tickPlayer, tickWorld);
+        }
+        boolean armorHasRenderer = dev.umb.legacy.legacyside.render.LegacyRenderCapture
+                .hasItemRenderer("hbm:item.ajro_boots", 0, "INVENTORY");
+        boolean stickHasRenderer = dev.umb.legacy.legacyside.render.LegacyRenderCapture
+                .hasItemRenderer("minecraft:stick", 0, "INVENTORY");
+        if (!armorHasRenderer) {
+            throw new IllegalStateException("hasItemRenderer(hbm:item.ajro_boots) was false - "
+                    + "a real, registered legacy IItemRenderer was not detected");
+        }
+        if (stickHasRenderer) {
+            throw new IllegalStateException("hasItemRenderer(minecraft:stick) was true - a plain "
+                    + "vanilla item must never be reported as having a custom renderer");
+        }
+        report.append("hasItemRenderer: ok, armor=").append(armorHasRenderer)
+                .append(" stick=").append(stickHasRenderer).append('\n');
+
         bridge.shutdown();
         return "M1-OK\n" + report;
     }

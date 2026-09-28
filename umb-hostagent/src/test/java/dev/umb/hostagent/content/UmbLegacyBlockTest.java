@@ -257,6 +257,79 @@ class UmbLegacyBlockTest {
         assertTrue(empty.isEmpty(), "an empty live selection answer must not use the static outline");
     }
 
+    /**
+     * Shape queries also arrive from the client/render thread (outline picking), concurrently
+     * with the server thread's own queries for the same position. The live bridge calls are
+     * not safe to run there: they mutate the one shared legacy world and per-block instance
+     * state no other thread synchronizes against. So a client-side level must fall back to
+     * the static shape on every channel and never invoke the bridge at all.
+     */
+    @Test
+    void liveShapeQueriesAreSkippedOnTheClientAndNeverReachTheBridge() throws Exception {
+        FakeLegacyBridge bridge = new FakeLegacyBridge();
+        // If the client-side guard regresses, these live results (deliberately different from the
+        // static shapes below) would be the ones observed instead of the static fallback.
+        bridge.collisionBoxesResult = java.util.Collections.emptyList();
+        bridge.selectionBoxesResult = java.util.Collections.singletonList(
+                new double[] {0.125, 0.0, 0.125, 0.875, 0.75, 0.875});
+        UmbBridgeHost.set(bridge);
+        ResourceKey<Block> key = ResourceKey.create(Registries.BLOCK,
+                Identifier.fromNamespaceAndPath("umbtest", "clientshape" + (nextId++)));
+        BlockBehaviour.Properties props = BlockBehaviour.Properties.of().dynamicShape().setId(key);
+        VoxelShape staticShape = Shapes.box(0.0, 0.0, 0.0, 1.0, 0.5, 1.0);
+        VoxelShape staticCollision = Shapes.box(0.0, 0.0, 0.0, 1.0, 0.25, 1.0);
+        UmbLegacyBlock b = new UmbLegacyBlock(props, rec(false), staticShape, staticCollision);
+        ServerLevel client = fakeLevel(true);
+
+        VoxelShape outline = b.getShape(b.defaultBlockState(), client, BlockPos.ZERO,
+                net.minecraft.world.phys.shapes.CollisionContext.empty());
+        VoxelShape collision = b.getCollisionShape(b.defaultBlockState(), client, BlockPos.ZERO,
+                net.minecraft.world.phys.shapes.CollisionContext.empty());
+        VoxelShape support = b.getBlockSupportShape(b.defaultBlockState(), client, BlockPos.ZERO);
+
+        assertTrue(Shapes.equal(staticShape, outline),
+                "a client-side outline query must use the static shape, not the live selection answer");
+        assertTrue(Shapes.equal(staticCollision, collision),
+                "a client-side collision query must use the static shape, not the live collision answer");
+        // getBlockSupportShape's own non-live fallback is Shapes.block() (a full unit cube) when
+        // hasCollision && !collisionShape.isEmpty() -- see its javadoc -- not the raw static
+        // collisionShape; the property under test here is only that it is NOT the live answer.
+        assertTrue(Shapes.equal(Shapes.block(), support),
+                "a client-side support query must use the static (non-live) fallback");
+        assertEquals(0, bridge.selectionBoxesCallCount,
+                "the client thread must never call the shared legacy bridge's selectionBoxes");
+        assertEquals(0, bridge.collisionBoxesCallCount,
+                "the client thread must never call the shared legacy bridge's collisionBoxes");
+
+        // Server-side behavior is unchanged: the same block, on a real server-side level, still
+        // gets the live answers (this is the existing, already-covered contract).
+        ServerLevel server = fakeLevel(false);
+        VoxelShape liveOutline = b.getShape(b.defaultBlockState(), server, BlockPos.ZERO,
+                net.minecraft.world.phys.shapes.CollisionContext.empty());
+        assertTrue(Shapes.equal(Shapes.box(0.125, 0.0, 0.125, 0.875, 0.75, 0.875), liveOutline),
+                "server-side outline queries must still see the live selection answer");
+        assertEquals(1, bridge.selectionBoxesCallCount);
+    }
+
+    @Test
+    void clientShapeQueriesReadTheServersCachedAnswer() throws Exception {
+        FakeLegacyBridge bridge = new FakeLegacyBridge();
+        bridge.collisionBoxesResult = java.util.Collections.singletonList(
+                new double[] {0.0, 0.0, 0.0, 1.0, 1.0, 1.0});
+        bridge.cachedShapeResult = java.util.Collections.emptyList();
+        UmbBridgeHost.set(bridge);
+        ResourceKey<Block> key = ResourceKey.create(Registries.BLOCK,
+                Identifier.fromNamespaceAndPath("umbtest", "cachedshape" + (nextId++)));
+        BlockBehaviour.Properties props = BlockBehaviour.Properties.of().dynamicShape().setId(key);
+        UmbLegacyBlock b = new UmbLegacyBlock(props, rec(false), Shapes.block(), Shapes.block());
+
+        VoxelShape collision = b.getCollisionShape(b.defaultBlockState(), fakeLevel(true),
+                BlockPos.ZERO, net.minecraft.world.phys.shapes.CollisionContext.empty());
+
+        assertTrue(collision.isEmpty(), "an open door cached by the server must be passable on the client");
+        assertEquals(0, bridge.collisionBoxesCallCount);
+    }
+
     private static ServerPlayer fakePlayer() {
         return TestSupport.allocate(ServerPlayer.class);
     }

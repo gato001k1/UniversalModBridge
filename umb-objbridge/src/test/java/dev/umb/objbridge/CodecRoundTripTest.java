@@ -108,6 +108,7 @@ class CodecRoundTripTest {
         try (var s = Files.list(dir)) {
             for (Path p : s.filter(x -> x.toString().endsWith(".json")).toList()) {
                 JsonObject root = new Gson().fromJson(Files.readString(p), JsonObject.class);
+                if (isHeldWrapper(root)) continue; // umb:held wraps a base model, no OBJ
                 JsonObject model = root.getAsJsonObject("model");
                 assertEquals("umb:obj", model.get("type").getAsString(), p.toString());
                 model.remove("type");
@@ -132,6 +133,7 @@ class CodecRoundTripTest {
         try (var s = Files.list(dir)) {
             for (Path p : s.filter(x -> x.toString().endsWith(".json")).toList()) {
                 JsonObject root = new Gson().fromJson(Files.readString(p), JsonObject.class);
+                if (isHeldWrapper(root)) continue; // umb:held wraps a base model, no OBJ
                 JsonObject model = root.getAsJsonObject("model");
                 String sprite = model.get("texture").getAsString();     // hbm:models/weapons/minigun
                 String rel = sprite.substring(sprite.indexOf(':') + 1);
@@ -156,6 +158,7 @@ class CodecRoundTripTest {
         try (var s = Files.list(pack)) {
             for (Path p : s.filter(x -> x.toString().endsWith(".json")).toList()) {
                 JsonObject root = new Gson().fromJson(Files.readString(p), JsonObject.class);
+                if (isHeldWrapper(root)) continue; // umb:held wraps a base model, no OBJ
                 String model = root.getAsJsonObject("model").get("texture") == null ? null
                         : root.getAsJsonObject("model").get("model").getAsString();
                 assertNotNull(model);
@@ -166,5 +169,10 @@ class CodecRoundTripTest {
             }
         }
         assertTrue(checked > 400);
+    }
+
+    private static boolean isHeldWrapper(JsonObject root) {
+        JsonObject model = root.getAsJsonObject("model");
+        return model != null && model.has("type") && "umb:held".equals(model.get("type").getAsString());
     }
 }

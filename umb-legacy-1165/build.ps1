@@ -58,6 +58,15 @@ function MakeJar([string]$dest, [string]$jarPath) {
   Write-Output ("jar       : " + $jarPath)
 }
 
+# The bridge-api here is a build-time copy of the canonical umb-legacy source (byte-identical,
+# checked by BridgeApiMirrorTest). Change the contract there, never in this module.
+$canonicalApi = Join-Path (Split-Path -Parent $mod) 'umb-legacy\src\bridge-api\java\dev\umb\bridge\api'
+$mirrorApi = Join-Path $mod 'src\bridge-api\java\dev\umb\bridge\api'
+if (-not (Test-Path $canonicalApi)) { Write-Error ("missing canonical bridge-api: " + $canonicalApi); exit 1 }
+New-Item -ItemType Directory -Force $mirrorApi | Out-Null
+Get-ChildItem -Path $canonicalApi -Filter *.java | ForEach-Object {
+  Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $mirrorApi $_.Name) -Force
+}
 Compile 'bridge-api' (Join-Path $mod 'src\bridge-api\java') $null '8' (Join-Path $build 'classes-bridge-api')
 MakeJar (Join-Path $build 'classes-bridge-api') (Join-Path $build 'umb-legacy1165-bridge-api.jar')
 

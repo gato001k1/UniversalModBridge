@@ -101,7 +101,8 @@ public final class M1ProbeMain {
         out.flush();
 
         Runtime.getRuntime().halt(report.startsWith("M1-OK") || report.startsWith("CLIENT-OK")
-                || report.startsWith("ENTITY-OK") || report.startsWith("PERSISTENCE-OK") ? 0 : 1);
+                || report.startsWith("ENTITY-OK") || report.startsWith("PERSISTENCE-OK")
+                || report.startsWith("HUD-OK") ? 0 : 1);
     }
 
     private static final class Run implements Runnable {

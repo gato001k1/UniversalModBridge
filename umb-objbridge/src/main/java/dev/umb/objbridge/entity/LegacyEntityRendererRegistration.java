@@ -11,7 +11,7 @@ import net.minecraft.world.entity.EntityType;
 import java.lang.reflect.Field;
 import java.util.Map;
 
-/** Installs one provider for every generic legacy_entity type before the dispatcher is built. */
+/** Installs one provider for every generic legacy entity/part type before the dispatcher is built. */
 public final class LegacyEntityRendererRegistration {
     private static volatile boolean installed;
     private LegacyEntityRendererRegistration() { }
@@ -24,7 +24,12 @@ public final class LegacyEntityRendererRegistration {
             Map providers = (Map) f.get(null);
             int n = 0;
             for (Identifier id : BuiltInRegistries.ENTITY_TYPE.keySet()) {
-                if (!"legacy_entity".equals(id.getPath())) continue;
+                // legacy_part twins carry no legacy class identity, so the shared renderer
+                // resolves them to an empty capture and draws nothing - but the dispatcher
+                // still needs a provider bound, otherwise the type is unrenderable.
+                if (!"legacy_entity".equals(id.getPath()) && !"legacy_part".equals(id.getPath())) {
+                    continue;
+                }
                 EntityType<?> type = BuiltInRegistries.ENTITY_TYPE.getValue(id);
                 providers.put(type, (EntityRendererProvider<Entity>) LegacyEntityRenderer::new);
                 n++;

@@ -44,11 +44,29 @@ public final class M1165Probe {
         String blockId = "ironchest:iron_chest";
         int x = 100, y = 64, z = 100;
 
+        // Mirror production ordering: the host always places the native block before its
+        // tile entity attaches. Without it, a renderer reading TileEntity.getBlockState()
+        // (the iron chest renderer does, to pick the chest-type model) sees air and
+        // silently skips all rendering.
+        world.setBlock(x, y, z, blockId, 0, 3);
+
         TileHandle tile = bridge.createTile(blockId, x, y, z);
         if (tile == null) {
             throw new IllegalStateException("createTile(" + blockId + ") returned null");
         }
         report.append("createTile: ok, class=").append(tile.getClass().getName()).append('\n');
+
+        // The real iron chest renderer must produce real draw calls through the headless
+        // dispatcher - not merely "a factory exists". An empty/failed capture is reported,
+        // never swallowed.
+        if (tile instanceof TileHandle1165) {
+            dev.umb.bridge.api.EntityRenderCapture capture =
+                    ((TileHandle1165) tile).renderCapture(0.0f);
+            report.append("tesrCapture: stateKey=").append(capture.stateKey)
+                    .append(" draws=").append(capture.draws.size())
+                    .append(" vertices=").append(capture.vertexCount())
+                    .append('\n');
+        }
 
         ActivationResult activation = bridge.activate(blockId, x, y, z, new FakeHostPlayer(),
                 1, 0.5f, 0.5f, 0.5f);

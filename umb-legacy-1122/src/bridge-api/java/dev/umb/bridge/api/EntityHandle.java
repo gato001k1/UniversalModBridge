@@ -42,9 +42,16 @@ public interface EntityHandle {
     default double[] getBoundingBox() { return null; }
 
     /**
- * Extra legacy world-space collision boxes ({@code minX,minY,minZ,maxX,maxY,maxZ} each) beyond {@link #getBoundingBox}, or null/empty when there are none.
- * Covers the generic multipart contract: the vanilla parts array ({@code func_70021_al}, every part with...
- */
+     * Extra legacy world-space collision boxes ({@code minX,minY,minZ,maxX,maxY,maxZ} each) beyond
+     * {@link #getBoundingBox}, or null/empty when there are none.  Covers the generic multipart
+     * contract: the vanilla parts array ({@code func_70021_al}, every part with a usable
+     * {@code func_70046_E}) plus any helper-owned world-space {@code AxisAlignedBB} state the
+     * entity keeps outside its base box.  Found by type only (Entity/AxisAlignedBB fields, never
+     * a mod class or field name); the host unions them with the base box into its single native
+     * bounding box, because 26.2 entity-entity collision ({@code EntityGetter.getEntityCollisions},
+     * javap-verified) contributes exactly one box per entity.  Null is an honest "none known".
+     * Must never throw across the boundary.
+     */
     default java.util.List<double[]> getCollisionBoxes() { return null; }
 
     /**

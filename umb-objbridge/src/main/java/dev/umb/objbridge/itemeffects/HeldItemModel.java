@@ -1,23 +1,17 @@
 package dev.umb.objbridge.itemeffects;
 
-import com.mojang.serialization.Codec;
 import com.mojang.serialization.MapCodec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
-import dev.umb.objbridge.item.ObjItemModel;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.renderer.item.ItemModel;
 import net.minecraft.client.renderer.item.ItemModelResolver;
+import net.minecraft.client.renderer.item.ItemModels;
 import net.minecraft.client.renderer.item.ItemStackRenderState;
 import net.minecraft.client.resources.model.ResolvableModel;
-import net.minecraft.core.registries.BuiltInRegistries;
-import net.minecraft.resources.Identifier;
 import net.minecraft.world.entity.ItemOwner;
 import net.minecraft.world.item.ItemDisplayContext;
 import net.minecraft.world.item.ItemStack;
 import org.joml.Matrix4fc;
-
-import java.util.List;
-import java.util.Optional;
 
 /** Dynamic legacy-renderer wrapper for hand, GUI, ground, and fixed item contexts. */
 public final class HeldItemModel implements ItemModel {
@@ -32,8 +26,14 @@ public final class HeldItemModel implements ItemModel {
             base.update(state, stack, resolver, context, level, owner, seed);
             return;
         }
-        String id = BuiltInRegistries.ITEM.getKey(stack.getItem()).toString();
-        if (!HeldItemRuntime.hasHeldData(id)) {
+        // checked HeldItemRuntime.hasHeldData(id) - presence in a build-time static-extraction
+        // sidecar (held-render.md's P4 census) - which only covers items whose renderer had SOME
+        // statically recoverable OBJ/transform data. That is a real but much narrower set than
+        // "this item has a registered legacy IItemRenderer": the correct, universal, live check.
+        // A static sidecar can never be complete (a build-time census cannot see every renderer
+        // shape), and gating on it silently skipped this entire capture path for every item it
+        // missed, no matter how correctly the rest of the WIP worked.
+        if (!LegacyItemCaptureClient.hasCustomRenderer(stack, context)) {
             base.update(state, stack, resolver, context, level, owner, seed);
             return;
         }
@@ -49,19 +49,38 @@ public final class HeldItemModel implements ItemModel {
         state.setAnimated();
     }
 
-    /** Client-item type {@code umb:held}; the pack generator may select it explicitly. */
-    public record Unbaked(String model, Identifier texture, Optional<Float> fit, List<String> groups)
-            implements ItemModel.Unbaked {
+    /**
+     * Client-item type {@code umb:held}: wraps an ARBITRARY nested model declaration - not
+     * specifically an OBJ one - checked against a live legacy {@code IItemRenderer} lookup at
+     * each held/GUI/ground/fixed render (see {@link #update}).
+     *
+     * <pre>
+     * { "model": { "type": "umb:held",
+     *              "base": { "type": "minecraft:model", "model": "mcheli:item/some_weapon" } } }
+     * </pre>
+     *
+     * {@code base} decodes through {@code ItemModels.CODEC} - vanilla's own top-level dispatch
+     * {@code ItemModels} class) - so this never hardcodes or duplicates vanilla's own model
+     * baking for any particular {@code "type"}; it can wrap {@code "minecraft:model"} (the
+     * common case: an item whose renderer has no recoverable OBJ geometry, so the pack generator
+     * has nothing better to reference than the same flat model the base pack already emitted)
+     * exactly as well as any other registered type.
+     *
+     * <p>This is a SEPARATE mechanism from {@code ObjItemModel.Unbaked.bake}, which wraps itself
+     * in {@link #wrap} programmatically (a direct Java call, never through this codec) for items
+     * that DO have recoverable OBJ geometry - both converge on the same {@link #update}, so the
+     * live-renderer gate below applies identically either way.</p>
+     */
+    public record Unbaked(ItemModel.Unbaked base) implements ItemModel.Unbaked {
         public static final MapCodec<Unbaked> MAP_CODEC = RecordCodecBuilder.mapCodec(i -> i.group(
-                Codec.STRING.fieldOf("model").forGetter(Unbaked::model),
-                Identifier.CODEC.fieldOf("texture").forGetter(Unbaked::texture),
-                Codec.FLOAT.optionalFieldOf("fit").forGetter(Unbaked::fit),
-                Codec.STRING.listOf().optionalFieldOf("groups", List.of()).forGetter(Unbaked::groups)
+                ItemModels.CODEC.fieldOf("base").forGetter(Unbaked::base)
         ).apply(i, Unbaked::new));
         @Override public MapCodec<? extends ItemModel.Unbaked> type() { return MAP_CODEC; }
-        @Override public void resolveDependencies(ResolvableModel.Resolver resolver) { }
+        @Override public void resolveDependencies(ResolvableModel.Resolver resolver) {
+            base.resolveDependencies(resolver);
+        }
         @Override public ItemModel bake(ItemModel.BakingContext context, Matrix4fc transformation) {
-            return wrap(new ObjItemModel.Unbaked(model, texture, fit, groups).bake(context, transformation));
+            return wrap(base.bake(context, transformation));
         }
     }
 }

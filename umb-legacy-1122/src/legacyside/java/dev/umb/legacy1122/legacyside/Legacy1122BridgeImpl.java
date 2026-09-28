@@ -26,9 +26,8 @@ import java.util.Map;
  * {@code dev.umb.legacy1122.boot.Boot1122ProbeMain} proves from the application side, repeated here
  * to demonstrate it also holds from INSIDE the child loader, which is the position any future
  * FML-lifecycle driver would actually run from. Every other method is an HONEST STUB: no live
- * facade (no {@code UmbWorld1122}, no field-repaired vanilla, no driven FML lifecycle) exists yet -
- * see ERA-1122-PLAN.md "what a full boot still needs" for exactly what is missing and why building
- * it was out of scope for this lane. Stubs never throw across the boundary (the contract's own
+ * facade (no {@code UmbWorld1122}, no field-repaired vanilla, no driven FML lifecycle) exists yet.
+ * Stubs never throw across the boundary (the contract's own
  * rule) and log once via {@link HostWorld#log} rather than failing silently.</p>
  */
 public final class Legacy1122BridgeImpl implements LegacyBridge {
@@ -38,6 +37,8 @@ public final class Legacy1122BridgeImpl implements LegacyBridge {
     private volatile HostWorld host;
     private final Map<String, Object> liveTiles = new HashMap<String, Object>();
     private final Map<String, TileHandle1122> liveTileHandles = new HashMap<String, TileHandle1122>();
+    private final Map<Object, EntityHandle1122> liveEntities = new HashMap<Object, EntityHandle1122>();
+    private volatile Object entityWorldFacade;
 
     @Override
     public void boot(HostWorld world) throws Exception {
@@ -61,17 +62,15 @@ public final class Legacy1122BridgeImpl implements LegacyBridge {
                 throw new IllegalStateException(bootFailure, e);
             }
         }
-        // What a real boot() still needs, in order (ERA-1122-PLAN.md has the full evidence trail):
-        //   1. a field-repaired-or-DEBUG_SAVE-captured vanilla jar (obfuscated client.jar is on the
-        //      classpath today but not deobfuscated - Boot1122ProbeMain's expected-wall stages
-        //      prove this concretely);
+        // What a real boot() still needs, in order:
+        //   1. a field-repaired-or-captured vanilla jar (the obfuscated client.jar on the
+        //      classpath today is not deobfuscated);
         //   2. an FML lifecycle driver (this era's LegacyDriver-equivalent) that drives
-        //      CONSTRUCT -> PREINIT -> INIT -> POSTINIT over RegistryEvent.Register instead of the
-        //      1.7.10 GameRegistry.register* calls;
+        //      CONSTRUCT -> PREINIT -> INIT -> POSTINIT over RegistryEvent.Register;
         //   3. UmbWorld1122/UmbPlayer1122 facades implementing whatever the field-repaired
         //      World/EntityPlayer surface turns out to require.
         // None of that exists yet. This method intentionally goes no further than proving the
-        // loader/classpath plumbing, which is the honest state of this lane.
+        // loader/classpath plumbing.
         if (me.getClass().getName().equals("dev.umb.legacy1122.boot.Legacy1122Loader")) {
             String prop = System.getProperty("umb.1122.modjars", "");
             List<File> mods = new ArrayList<File>();
@@ -186,7 +185,7 @@ public final class Legacy1122BridgeImpl implements LegacyBridge {
         ClassLoader loader = Legacy1122BridgeImpl.class.getClassLoader();
         Class<?> facade = Class.forName("dev.umb.legacy1122.legacyside.Legacy1122WorldFacadeRaw", true, loader);
         // The helper is package-private in the default package (it must sit beside the notch
-        // classes), so open the method explicitly: live 02:56 IllegalAccessException.
+        // classes), so open the method explicitly.
         Method create = facade.getDeclaredMethod("create", HostWorld.class);
         create.setAccessible(true);
         return create.invoke(null, host);
@@ -380,8 +379,87 @@ public final class Legacy1122BridgeImpl implements LegacyBridge {
 
     @Override
     public EntityHandle restoreEntity(byte[] nbt) {
-        // honest stub: no live legacy universe to reconstruct an Entity from yet (see boot()).
+        if (!booted || nbt == null || nbt.length == 0) return null;
+        try {
+            ClassLoader loader = Legacy1122BridgeImpl.class.getClassLoader();
+            Object world = entityWorldFacade;
+            if (world == null) {
+                world = createWorldFacade(host);
+                entityWorldFacade = world;
+            }
+            Object tag = readNbt(nbt, loader);
+            if (tag == null) return null;
+            Class<?> entityList = Class.forName("net.minecraft.entity.EntityList", true, loader);
+            Object entity = null;
+            for (java.lang.reflect.Method m : entityList.getMethods()) {
+                if ((!m.getName().equals("createEntityFromNBT") && !m.getName().equals("func_75615_a"))
+                        || m.getParameterTypes().length != 2) continue;
+                try {
+                    m.setAccessible(true);
+                    entity = m.invoke(null, tag, world);
+                    break;
+                } catch (Throwable ignored) {
+                    // Try the next overload spelling.
+                }
+            }
+            if (entity == null) {
+                if (host != null) host.log("UMB-BRIDGE-1122 restoreEntity: no entity decoded");
+                return null;
+            }
+            EntityHandle1122 handle = new EntityHandle1122(entity, world);
+            synchronized (liveEntities) { liveEntities.put(entity, handle); }
+            return handle;
+        } catch (Throwable t) {
+            if (host != null) host.log("UMB-BRIDGE-1122 restoreEntity failed: " + t);
+            return null;
+        }
+    }
+
+    private static Object readNbt(byte[] nbt, ClassLoader loader) {
+        try {
+            Class<?> tools = Class.forName("net.minecraft.nbt.CompressedStreamTools", true, loader);
+            java.io.ByteArrayInputStream in = new java.io.ByteArrayInputStream(nbt);
+            for (String name : new String[] {"readCompressed", "read", "func_74796_a"}) {
+                for (java.lang.reflect.Method m : tools.getMethods()) {
+                    if (!m.getName().equals(name) || m.getParameterTypes().length != 1) continue;
+                    Class<?> param = m.getParameterTypes()[0];
+                    try {
+                        m.setAccessible(true);
+                        Object tag;
+                        if (param == byte[].class) {
+                            tag = m.invoke(null, new Object[] {nbt});
+                        } else if (param.isAssignableFrom(java.io.InputStream.class)) {
+                            tag = m.invoke(null, new Object[] {in});
+                        } else {
+                            continue;
+                        }
+                        if (tag != null) return tag;
+                    } catch (Throwable ignored) {
+                        // Try the next spelling.
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+            // No NBT runtime visible; the caller logs the honest null.
+        }
         return null;
+    }
+
+    @Override
+    public void tickEntities() {
+        java.util.List<EntityHandle1122> snapshot;
+        synchronized (liveEntities) { snapshot = new java.util.ArrayList<EntityHandle1122>(liveEntities.values()); }
+        for (EntityHandle1122 handle : snapshot) {
+            if (handle == null) continue;
+            try {
+                handle.tick();
+            } catch (Throwable t) {
+                if (host != null) host.log("UMB-ENTITY-1122 tick failed: " + t);
+            }
+            if (!handle.isValid()) {
+                synchronized (liveEntities) { liveEntities.values().remove(handle); }
+            }
+        }
     }
 
     public String bootFailure() {

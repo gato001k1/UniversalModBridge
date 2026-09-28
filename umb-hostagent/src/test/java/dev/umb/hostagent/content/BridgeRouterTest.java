@@ -215,6 +215,18 @@ class BridgeRouterTest {
         assertEquals(2, def.creates.get());
     }
 
+    @Test void placementGateStartsEraButRefusesFallbackUntilReady() throws Exception {
+        Fake def = new Fake("default");
+        Fake era = new Fake("era");
+        BridgeRouter router = routerWithEra(def, era);
+        router.boot(new FakeWorld());
+
+        assertFalse(router.readyForPlacement("testns:block"));
+        assertEquals(0, era.creates.get(), "a pending era must not route placement through the default bridge");
+        awaitBoot(era);
+        assertTrue(router.readyForPlacement("testns:block"));
+    }
+
     @Test void slowEraReturnsRetryableTileAndDrainsQueuedRetryAfterBoot() throws Exception {
         Fake def = new Fake("default");
         SlowFake era = new SlowFake("slow-era");

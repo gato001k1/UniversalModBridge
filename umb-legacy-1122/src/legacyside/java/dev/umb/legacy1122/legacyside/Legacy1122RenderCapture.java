@@ -38,10 +38,15 @@ public final class Legacy1122RenderCapture {
     public static Object color(Object b, int r, int g, int bl, int a) { return b; }
     public static void endVertex(Object b) { Capture c=ACTIVE.get(); if(c!=null)c.vertex(); }
     public static void finish(Object b) { Capture c=ACTIVE.get(); if(c!=null)c.draw(); }
+    public static void draw() { Capture c=ACTIVE.get(); if(c!=null)c.draw(); }
+    public static void recordTexture(Object id) {
+        Capture c=ACTIVE.get();
+        if(c!=null&&id!=null)c.texture=String.valueOf(id);
+    }
 
     private static final class Capture {
         final String entityClass, stateKey; final List<EntityRenderCapture.Draw> draws=new ArrayList<EntityRenderCapture.Draw>();
-        final List<Float> data=new ArrayList<Float>(); int ops,pushes,pops,mode; boolean cull;
+        final List<Float> data=new ArrayList<Float>(); int ops,pushes,pops,mode; boolean cull; String texture;
         double x,y,z,u,v; float nx,ny,nz;
         Capture(String e,String s){entityClass=e;stateKey=s;}
         void begin(int m){mode=m;}
@@ -54,7 +59,7 @@ public final class Legacy1122RenderCapture {
             List<Float> assembled=asQuads(mode,data);
             float[] a=assembled.isEmpty()?null:new float[assembled.size()];
             if(a!=null)for(int i=0;i<a.length;i++)a[i]=assembled.get(i).floatValue();
-            draws.add(EntityRenderCapture.Draw.owned(null,a,assembled.size()/8,null,cull));
+            draws.add(EntityRenderCapture.Draw.owned(texture,a,assembled.size()/8,null,cull));
             data.clear();
         }
         private static List<Float> asQuads(int mode,List<Float> v){

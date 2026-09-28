@@ -145,8 +145,20 @@ final class LegacyTileCaptureClient {
         return ((Number) value).intValue();
     }
 
-    private static Object captureClientTile(Object tile, float partialTick) {
+    /**
+     * Captures an era-owned provider value.  1.12.2 providers publish the opaque TileHandle
+     * itself, while the older 1.7.10 provider publishes the raw TileEntity.  Prefer the
+     * handle's universal renderCapture seam so an era never falls through to the 1.7.10
+     * LegacyRenderCapture classloader; retain the raw-tile path for legacy providers that have
+     * no handle seam.
+     */
+    static Object captureClientTile(Object tile, float partialTick) {
         try {
+            Method handleCapture = findMethod(tile.getClass(), "renderCapture", float.class);
+            if (handleCapture != null) {
+                Object captured = handleCapture.invoke(tile, Float.valueOf(partialTick));
+                if (captured != null) return captured;
+            }
             Class<?> capture = loadClass("dev.umb.legacy.legacyside.render.LegacyRenderCapture",
                     tile.getClass().getClassLoader());
             if (capture == null) {

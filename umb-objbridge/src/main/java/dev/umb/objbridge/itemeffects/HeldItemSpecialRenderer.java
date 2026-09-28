@@ -56,6 +56,7 @@ final class HeldItemSpecialRenderer implements SpecialModelRenderer<ItemStack> {
         int count = field(draw, "vertexCount").getInt(draw);
         if (raw == null || data == null || count <= 0) return;
         Identifier texture = Identifier.parse(normalize(raw));
+        dev.umb.objbridge.entity.LegacyCaptureTextureResolver.ensure(texture);
         boolean cull = hasCull(draw);
         RenderType type = cull ? RenderTypes.entityCutoutCull(texture) : RenderTypes.entityCutout(texture);
         collector.submitCustomGeometry(pose, type, (p, out) -> emit(data, count, matrix, p, out, light));
@@ -90,7 +91,8 @@ final class HeldItemSpecialRenderer implements SpecialModelRenderer<ItemStack> {
     private static String normalize(String texture) {
         int colon=texture.indexOf(':'); if(colon<0)return texture;
         String ns=texture.substring(0,colon), path=texture.substring(colon+1);
-        if(path.startsWith("textures/")) path=path.substring(9);
+        // Same form as the entity path: the resolver loads "<ns>:textures/..." from the legacy jar.
+        if(!path.startsWith("textures/")) path="textures/"+path;
         if(path.toLowerCase(java.util.Locale.ROOT).endsWith(".png")) path=path.substring(0,path.length()-4);
         return ns+":"+path;
     }
