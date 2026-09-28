@@ -136,12 +136,24 @@ function Copy-File([string]$Source, [string]$Destination) {
   Copy-Item -LiteralPath $Source -Destination $Destination -Force
 }
 
+function Get-PinnedSha1([string]$RelativeUrl) {
+  $pins = Join-Path $PSScriptRoot 'forge-1710-library-sha1.txt'
+  if (-not (Test-Path -LiteralPath $pins)) { return $null }
+  foreach ($line in Get-Content -LiteralPath $pins) {
+    $parts = $line.Trim() -split '\s+', 2
+    if ($parts.Count -eq 2 -and $parts[1] -eq $RelativeUrl) { return $parts[0] }
+  }
+  return $null
+}
+
 function Download-LibraryPath([string]$RelativePath, [string]$Destination) {
   $relativeUrl = ($RelativePath -replace '\\', '/')
+  $pinned = Get-PinnedSha1 $relativeUrl
   foreach ($base in @('https://maven.minecraftforge.net', 'https://repo1.maven.org/maven2')) {
     $url = "$base/$relativeUrl"
     try {
-      $sha = (Get-TextUrl "$url.sha1").Split()[0]
+      # Some old Forge-hosted libraries have no .sha1 next to them; use the checked-in pin.
+      $sha = if ($pinned) { $pinned } else { (Get-TextUrl "$url.sha1").Split()[0] }
       Download-Verified $url $sha $Destination
       return
     } catch {
