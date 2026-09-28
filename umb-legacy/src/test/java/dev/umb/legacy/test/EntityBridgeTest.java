@@ -54,9 +54,10 @@ class EntityBridgeTest {
     }
 
     /**
- * A synthetic legacy Entity.
- * {@code func_70071_h_} (onUpdate) does a tiny, deterministic, REAL computation (motion integration) so tests can prove {@link EntityHandle#tick()} actually executed genuine legacy code, not a fake.
- */
+     * A synthetic legacy Entity. {@code func_70071_h_} (onUpdate) does a tiny, deterministic,
+     * REAL computation (motion integration) so tests can prove {@link EntityHandle#tick()}
+     * actually executed genuine legacy code, not a fake. The three overrides below are Entity's
+     */
     public static final class TestFixtureEntity extends Entity {
         int tickCalls;
         boolean throwOnTick;
@@ -480,7 +481,6 @@ class EntityBridgeTest {
 
     @Test
     void joinCancellationFollowsTheVanillaAddPathRule() {
-        // Vanilla World.func_72838_d / func_72868_a : a cancelled join keeps
         // the entity out of the world, UNLESS it is force-spawned (field_98038_p). The bus
         // delivery itself cannot be subscribed headless - EventBus.register needs a booted
         // Loader with a LaunchClassLoader (verified empirically) - so subscriber delivery is
@@ -664,5 +664,40 @@ class EntityBridgeTest {
         assertTrue(facade.func_70089_S());
         facade.func_70606_j(0.0F);
         assertFalse(facade.func_70089_S());
+    }
+
+    /**
+     * (directPassenger in the interact diagnostic) holding a
+     * dev.umb.legacy.legacyside.UmbHostEntity - the native-query facade - after the pilot boarded.
+     * Root cause: MCHeli's own MCH_EntityAircraft.mountMobToSeats (real vanilla-style auto-crew
+     * feature, runs once server-side right after the pilot mounts) scans a small AABB around the
+     * aircraft for stray EntityLivingBase "mobs" to auto-mount into empty seats via
+     * candidate.func_70078_a(seat) - vanilla mountEntity, called ON the candidate. Before this fix,
+     * a UmbLegacyPartTwin collider (the seat's OWN extra-hitbox collider; see
+     * HostWorldImpl.getEntities' now-fixed filter) leaked into that scan as a plain UmbHostEntity
+     * and got auto-mounted into its own seat.
+     *
+     * This defense-in-depth layer closes the same bug from the facade's own side: whatever finds
+     * a UmbHostEntity via ANY AABB path and tries to mount it (func_70078_a, vanilla's real
+     * mountEntity, called on the rider) must be refused - a fresh per-query facade is never "a
+     * host passenger really riding its twin" (its own class javadoc), so it must never end up
+     * wired into a legacy entity's riding graph on either side.
+     */
+    @Test
+    void nativeFacadeRefusesToBecomeARider() {
+        FakeHostLevel host = new FakeHostLevel();
+        FakeHostEntity strayCollider = new FakeHostEntity("stray-part-twin");
+        host.nativeEntities.add(strayCollider);
+        UmbWorld world = UmbWorld.create(host, 0);
+        EntityLivingBase facade = (EntityLivingBase) world.func_72839_b(null,
+                AxisAlignedBB.func_72330_a(-1, -1, -1, 1, 3, 1)).get(0);
+        TestFixtureEntity seat = new TestFixtureEntity(world);
+
+        facade.func_70078_a(seat);
+
+        assertNull(seat.field_70153_n,
+                "a query facade must never become a legacy entity's rider, no matter who tries to mount it");
+        assertNull(facade.field_70154_o,
+                "a refused mount must not wire up the facade's own riding field either");
     }
 }

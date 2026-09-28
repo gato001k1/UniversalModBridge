@@ -548,12 +548,13 @@ public final class LegacyClientFacade {
         setFirstFieldOfType(minecraft, SoundHandler.class,
                 new ForwardingSoundHandler(host, legacyPlayerName(serverPlayer)));
 
-        set(Minecraft.class, "field_71432_P", null, minecraft);
-        // Publish services with the singleton, not ticks later: anything reading
-        // the fresh facade between here and the end of install() - or a concurrent
-        // install on another thread before its own bind runs - must see bound
-        // services, never nulls.
+        // install() publishes the facade where concurrent render-thread singleton
+        // reads can observe it - vanilla RenderItem's missing-icon path calls
+        // Minecraft.func_71410_x().func_110434_K() on every draw - and a read landing
+        // between publish and bind sees field_71446_o null. bindSharedClientServices
+        // touches only the fresh object, so seeding first changes nothing else.
         bindSharedClientServices(minecraft);
+        set(Minecraft.class, "field_71432_P", null, minecraft);
         // The synthetic client has no constructor-created EntityRenderer.  Legacy client
         // listeners are still allowed to write camera state (for example, roll) through the
         // vanilla Minecraft facade, so leaving this field null turns an otherwise isolated
@@ -1491,8 +1492,15 @@ public final class LegacyClientFacade {
                 setField(minecraft, Minecraft.class, "field_71466_p", font);
                 setField(minecraft, Minecraft.class, "field_71464_q", font);
             }
-        } catch (Throwable ignored) {
-            // Covered by the full bind in prepareClientUniverse / bindClientRenderServices.
+        } catch (Throwable sharedBindFailed) {
+            // Loud on purpose: a facade published with null services is the bug-#29
+            // NPE one draw later. The full bind still covers it, but the cause must
+            // be named here while it is adjacent.
+            if (LegacyInputDiag.oncePer("client-shared-services", 60_000_000_000L)) {
+                LegacyInputDiag.log("client shared services seed failed cause="
+                        + sharedBindFailed.getClass().getName() + ":"
+                        + String.valueOf(sharedBindFailed.getMessage()));
+            }
         }
     }
 

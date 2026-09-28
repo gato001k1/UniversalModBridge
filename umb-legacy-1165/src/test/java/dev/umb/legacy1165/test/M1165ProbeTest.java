@@ -18,21 +18,22 @@ import dev.umb.legacy1165.boot.Legacy1165Loader;
  * The round-4 vertical gate: runs {@code M1165Probe} (boot -> place -> activate -> 54 slots
  * -> put/take -> tick -> NBT) inside the isolated universe and asserts {@code M1165-OK}.
  * Needs the real fetched jars (self-skips without them). Takes ~30s (a full ModLoader boot) -
- * that is the point: this is the live-universe proof, not a unit test.
  */
 class M1165ProbeTest {
-
     /** The client-dist pass is opt-in; these tests exercise it. */
     private String previousDist;
+
     @org.junit.jupiter.api.BeforeEach
     void enableClientDist() {
         previousDist = System.setProperty("umb.1165.dist", "CLIENT");
     }
+
     @org.junit.jupiter.api.AfterEach
     void restoreDist() {
         if (previousDist == null) System.clearProperty("umb.1165.dist");
         else System.setProperty("umb.1165.dist", previousDist);
     }
+
 
     @Test
     void liveUniverseVerticalIsOk() throws Exception {
@@ -60,23 +61,35 @@ class M1165ProbeTest {
             String result = String.valueOf(run.invoke(null));
             assertNotNull(result);
             assertTrue(result.startsWith("M1165-OK"), "M1165 vertical failed:\n" + result);
-            // With Dist=CLIENT the mod's own client-setup listener registers its TESR, so the
-            // dispatcher must resolve the real IronChestTileEntityRenderer for this tile -
-            // "no renderer" / "dispatcher unavailable" would mean registration itself failed.
-            // Actual vertex output is a separate, deeper claim this probe does not assert:
-            // the renderer needs a working texture-atlas subsystem this universe does not
-            // build - a documented residual gap, not a registration problem.
+            // era-1165-client-pass: Dist=CLIENT (see Legacy1165Lifecycle's class javadoc) lets
+            // IronChest's own DistExecutor-gated client-setup listener register its TESR, so the
+            // dispatcher must now resolve the REAL IronChestTileEntityRenderer for this tile -
+            // "no renderer" / "dispatcher unavailable" would mean the registration itself never
+            // happened. Actual vertex output is a SEPARATE, deeper claim this probe does not
+            // assert on: real-jar tracing (era-1165-client-pass.md) found that renderer calls
+            // Minecraft.getModelManager().getAtlasTexture(...) (RenderMaterial's texture/sprite
+            // resolution) to get an IVertexBuilder at all, which needs a working texture-atlas
+            // subsystem this universe does not build - a documented, separate residual gap
+            // (a headless resource-manager facade), not a client-dist registration problem.
             java.util.regex.Matcher m = java.util.regex.Pattern.compile("tesrCapture: stateKey=(\\S+)")
                     .matcher(result);
             assertTrue(m.find(), "M1165 report has no tesrCapture line:\n" + result);
             String stateKey = m.group(1);
             // stateKey names the resolved renderer whether the render call succeeded
             // ("1165-tesr:<class>") or later threw ("1165-tesr-threw:<class>:<cause>") - either
-            // form proves dispatch found the real renderer; only "renderer-missing" /
-            // "dispatcher-unavailable" would mean registration itself failed.
+            // form proves dispatch found the REAL IronChestTileEntityRenderer; only
+            // "renderer-missing"/"dispatcher-unavailable" would mean registration itself failed.
             assertTrue(stateKey.contains("IronChestTileEntityRenderer"),
                     "expected the real dispatcher to resolve IronChestTileEntityRenderer, got "
                             + stateKey + ":\n" + result);
+            // era-1165-client-facade, gap (a): the headless atlas (real mod-jar PNGs,
+            // demand-filled) must let the real renderer EMIT geometry, not just resolve.
+            java.util.regex.Matcher d = java.util.regex.Pattern.compile("draws=(\\d+)")
+                    .matcher(result);
+            assertTrue(d.find(), "M1165 report has no draws count:\n" + result);
+            assertTrue(Integer.parseInt(d.group(1)) > 0,
+                    "expected the real IronChest renderer to emit draws (headless atlas), got "
+                            + d.group(1) + ":\n" + result);
         }
     }
 }

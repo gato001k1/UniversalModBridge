@@ -6,16 +6,16 @@ import java.util.List;
 import java.util.function.Consumer;
 
 /**
- * Boots the real ModLoader lifecycle (same mechanism as
- * {@link Legacy1165BridgeImpl#boot} / {@link M1165Probe}) against whichever mod jars
- * {@code -Dumb.1165.modjars} names, then reports what the mods' own client-setup
- * registration produced - entity renderer factory count and TESR renderer count -
- * without re-firing any event itself.
+ * ModLoader lifecycle (same mechanism as {@link Legacy1165BridgeImpl#boot} / {@link M1165Probe})
+ * against whichever mod jars {@code -Dumb.1165.modjars} names, then reports what the mods' own
+ * client-setup registration produced - entity renderer factory count and TESR renderer count -
+ * without re-firing any event itself (see {@link Legacy1165Lifecycle}'s class javadoc for why
+ * Dist=CLIENT during construction is what makes that registration run for real).
  *
  * <p>Unlike {@link M1165Probe} (which drives one specific mod's container/GUI contract), this
  * probe only cares whether registration completed and the lifecycle reports {@code allOk()} -
- * the generic, mod-agnostic proof that a real entity-rendering mod's own client-setup calls
- * executed. Called reflectively from inside the booted {@code Legacy1165Loader}, exactly like
+ * {@code DistExecutor.runForDist}/{@code registerEntityRenderingHandler} calls executed.
+ * Called reflectively from inside the booted {@code Legacy1165Loader}, exactly like
  * {@code M1165Probe}.</p>
  */
 public final class EntityRenderClientProbe {
@@ -60,6 +60,7 @@ public final class EntityRenderClientProbe {
         return "PROBE-OK\n"
                 + "modId=" + result.modId + " modVersion=" + result.modVersion + "\n"
                 + "entityRendererFactories=" + result.entityRendererFactories + "\n"
-                + "tesrRenderers=" + result.tesrRenderers + "\n";
+                + "tesrRenderers=" + result.tesrRenderers + "\n"
+                + "entityCaptureInstalled=" + result.entityCaptureInstalled + "\n";
     }
 }

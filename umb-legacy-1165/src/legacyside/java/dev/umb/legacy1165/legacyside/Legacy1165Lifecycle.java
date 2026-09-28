@@ -99,6 +99,13 @@ public final class Legacy1165Lifecycle {
     private Legacy1165Lifecycle() {
     }
 
+    /**
+     * True once THIS lifecycle installed the headless Minecraft placeholder (as
+     * opposed to finding a real Minecraft already present). Guards later
+     * placeholder-only writes such as the dispatcher rebind.
+     */
+    private static volatile boolean placeholderInstalledByUs;
+
     /** Stage outcome for reports. */
     public static final class Stage {
         public final String name;
@@ -132,6 +139,12 @@ public final class Legacy1165Lifecycle {
          */
         public int entityRendererFactories = -1;
         public int tesrRenderers = -1;
+        /**
+         * True once {@code LegacyEntityRenderCapture1165Client.install} ran with a
+         * populated manager (vanilla + modded renderers). False means entity capture
+         * stayed unavailable even though factories registered - the gap-(b) signal.
+         */
+        public boolean entityCaptureInstalled = false;
 
         public boolean allOk() {
             for (Stage s : stages) {
@@ -211,8 +224,8 @@ public final class Legacy1165Lifecycle {
         }
         result.add("gamedata", true, ms(t0), null);
 
-        // ---- Dist: CLIENT by default (override with -Dumb.1165.dist=DEDICATED_SERVER), same
-        // convention as 1.7.10's UmbSidedHandler (umb.legacy.side, javadoc: "the integrated host
+        // ---- Dist: CLIENT only when opted in via -Dumb.1165.dist=CLIENT (default
+        // DEDICATED_SERVER), same convention as 1.7.10's UmbSidedHandler (umb.legacy.side, javadoc: "the integrated host
         // passes CLIENT so client-only coremods see the same side as the real 26.2 client").
         // DEDICATED_SERVER (the previous unconditional choice here) was modeled on "production
         // launch target fmlserver does this", but that made every dist-gated mod-construction
@@ -233,6 +246,18 @@ public final class Legacy1165Lifecycle {
                 ? Dist.CLIENT : Dist.DEDICATED_SERVER;
         setStaticField(FMLEnvironment.class, "dist", dist);
         log.accept("[lifecycle] dist=" + dist);
+
+        // ---- headless client facade, installed BEFORE mod construction (not just before
+        // loadMods): construction-time client checks read it too. Proven: IE's
+        // ClientProxy.modConstruction() (called from the @Mod constructor) populates its
+        // client API (IVertexBufferHolder.CREATE and friends) only when
+        // CommonProxy.modConstruction; upstream source guards on Minecraft.getInstance()).
+        // A production client likewise constructs mods with the instance present. Only
+        // installed when CLIENT is on; never overwrites a real Minecraft (checked
+        // inside installHeadlessMinecraftPlaceholder).
+        if (dist == Dist.CLIENT) {
+            installHeadlessMinecraftPlaceholder(log);
+        }
 
         // ---- mod discovery over the named jars (Forge's own locator + parser + scan).
         // Production fills these from the launch arguments (see the launch jar manifest's
@@ -394,15 +419,13 @@ public final class Legacy1165Lifecycle {
         // ---- loadMods: COMMON_SETUP + SIDED_SETUP (direct call, production signature).
         // With Dist=CLIENT (see above), SIDED_SETUP fires the REAL FMLClientSetupEvent through
         // Forge's own production dispatch - no manual per-mod event re-post is needed or
-        // attempted.  Two client-only singletons that registration code reads are stood in for:
-        // a field-less Minecraft placeholder (Minecraft.func_71410_x(), read directly by e.g.
-        // Torchmaster's/Alex's Mobs' client setup AND by real TESR/entity renderers at every
-        // installHeadlessMinecraftPlaceholder) and a headless TileEntityRendererDispatcher
-        // (populated by ClientRegistry.bindTileEntityRenderer, e.g. IronChest's 7 chest
-        // variants, swapped back out once loadMods/finishMods below complete).
+        // attempted.  The headless Minecraft placeholder was already installed before
+        // construction (see above); here only the TESR dispatcher is swapped: a headless
+        // TileEntityRendererDispatcher (populated by ClientRegistry.bindTileEntityRenderer,
+        // e.g. IronChest's 7 chest variants, swapped back out once loadMods/finishMods
+        // below complete).
         Object[] tesrSwap = null;
         if (dist == Dist.CLIENT) {
-            installHeadlessMinecraftPlaceholder(log);
             tesrSwap = swapInHeadlessTileDispatcher(log);
         }
         t0 = now();
@@ -632,16 +655,31 @@ public final class Legacy1165Lifecycle {
             }
 
             // Step 3: populate the manager from the registered factories.
+            // Vanilla first: RenderingRegistry.loadEntityRenderers ends with vanilla's own
+            // EntityRendererManager.validateRendererExistence(), which throws
+            // IllegalStateException for every vanilla EntityType missing from the map
+            // (proven: "No renderer registered for minecraft:area_effect_cloud"). A
+            // production manager arrives pre-populated by its real constructor; ours is
+            // headless, so vanilla's own registration table runs here, for real (see
+            // registerVanillaEntityRenderers) - then the modded factories layer on top.
+            registerVanillaEntityRenderers(mgr, log);
             net.minecraftforge.fml.client.registry.RenderingRegistry.loadEntityRenderers(mgr);
             int loaded = mgr.field_78729_o == null ? 0 : mgr.field_78729_o.size();
             log.accept("[entity-render] EntityRendererManager loaded renderers=" + loaded);
 
             // Step 4: install into the capture layer.
             LegacyEntityRenderCapture1165Client.install(mgr);
+            result.entityCaptureInstalled = true;
+            // The placeholder's dispatcher now points at the populated manager too.
+            populateSkins(mgr);
+            setPlaceholderDispatcher(mgr, log);
             log.accept("[entity-render] LegacyEntityRenderCapture1165Client installed manager="
                     + (mgr != null ? "ok" : "null") + " renderers=" + loaded);
         } catch (Throwable t) {
-            log.accept("[entity-render] finishEntityRendererCapture failed: " + t);
+            // Full chain, not just the headline: renderer-registration failures name the
+            // exact mod factory and vanilla type involved (proven: "No renderer registered
+            // for minecraft:..." needs its thrower identified, not just its message).
+            log.accept("[entity-render] finishEntityRendererCapture failed: " + fullChain(t));
         }
     }
 
@@ -660,11 +698,12 @@ public final class Legacy1165Lifecycle {
      * client: all three only need a non-null receiver whose null fields are tolerated, exactly
      * the same one-field placeholder this lifecycle already used for
      * {@code TileEntityRendererDispatcher}'s class-init (see {@code initTileDispatcherClass}),
-     * generalized to cover the universe's whole lifetime instead of one class-init. A "proper"
-     * facade (real GameSettings/ItemRenderer/etc.) is deliberately not built: nothing observed
-     * in the real corpus needs one, and a future mod that does should extend this placeholder
-     * with the SPECIFIC field its own stack trace names, not a speculative one built ahead of
-     * evidence.</p>
+     * generalized to cover the universe's whole lifetime instead of one class-init.
+     * Grown strictly on demand since: each added sub-object (resource manager,
+     * key bindings, colour registries, entity dispatcher + player renderers, model
+     * manager + demand-filled atlases) answers one stack trace that named it, built
+     * from real constructors and real mod-jar resources - never a speculative
+     * facade built ahead of evidence.</p>
      */
     private static void installHeadlessMinecraftPlaceholder(Consumer<String> log) {
         try {
@@ -680,18 +719,57 @@ public final class Legacy1165Lifecycle {
                     .invoke(unsafeField.get(null), net.minecraft.client.Minecraft.class);
             // Client setup registers reload listeners on Minecraft.getResourceManager(); a real,
             // empty manager accepts them (they run with no client packs loaded).
-            setInstanceField(placeholder, "field_110451_am",
+            net.minecraft.resources.SimpleReloadableResourceManager resourceManager =
                     new net.minecraft.resources.SimpleReloadableResourceManager(
-                            net.minecraft.resources.ResourcePackType.CLIENT_RESOURCES));
+                            net.minecraft.resources.ResourcePackType.CLIENT_RESOURCES);
+            setInstanceField(placeholder, "field_110451_am", resourceManager);
             // ClientRegistry.registerKeyBinding appends to gameSettings.keyBindings.
             Object settings = unsafeClass.getMethod("allocateInstance", Class.class)
                     .invoke(unsafeField.get(null), net.minecraft.client.GameSettings.class);
             setInstanceField(settings, "field_74324_K", new net.minecraft.client.settings.KeyBinding[0]);
             setInstanceField(placeholder, "field_71474_y", settings);
+            // Client colour registration (IE's ClientProxy.init registers its item/block
+            // colours into these): REAL vanilla registries, built by their own public
+            // no-arg constructors exactly as a client constructs them - nothing stubbed.
+            // field_184127_aH (BlockColors); ItemColors()/BlockColors() public no-arg.
+            net.minecraft.client.renderer.color.ItemColors itemColors =
+                    new net.minecraft.client.renderer.color.ItemColors();
+            net.minecraft.client.renderer.color.BlockColors blockColors =
+                    new net.minecraft.client.renderer.color.BlockColors();
+            setInstanceField(placeholder, "field_184128_aI", itemColors);
+            setInstanceField(placeholder, "field_184127_aH", blockColors);
+            // Client entity-dispatcher read (IE's ClientProxy.init adds armour layers to
+            // the default/slim PlayerRenderers from getSkinMap()): the SAME headless
+            // EntityRendererManager the capture layer uses (field_78729_o map already set
+            // inside allocateHeadlessEntityRendererManager), with REAL vanilla
+            // PlayerRenderers built by their own public (manager, slim) constructor -
+            // EntityRendererManager.field_178636_l (Map<String, PlayerRenderer>, read via
+            // getSkinMap); PlayerRenderer(EntityRendererManager, boolean) public.
+            net.minecraft.client.renderer.entity.EntityRendererManager headlessMgr =
+                    allocateHeadlessEntityRendererManager();
+            setInstanceField(placeholder, "field_175616_W", headlessMgr);
+            populateSkins(headlessMgr);
+            // Headless model manager + demand-filled texture atlases (the atlas gap:
+            // IronChest's renderer resolves its sprite per render through
+            // Minecraft.getAtlas -> ModelManager.getAtlasTexture). All real public
+            // constructors (TextureManager(IResourceManager),
+            // ModelManager(TextureManager, BlockColors, mipmapLevels=0)); the sprite
+            // content comes from HeadlessAtlas1165 (real mod-jar PNGs, on demand).
+            net.minecraft.client.renderer.texture.TextureManager textures =
+                    new net.minecraft.client.renderer.texture.TextureManager(
+                            (net.minecraft.resources.IResourceManager) resourceManager);
+            net.minecraft.client.renderer.model.ModelManager models =
+                    new net.minecraft.client.renderer.model.ModelManager(textures,
+                            blockColors, 0);
+            HeadlessAtlas1165.installInto(models, log);
+            setInstanceField(placeholder, "field_175617_aL", models);
             instance.set(null, placeholder);
+            placeholderInstalledByUs = true;
             log.accept("[entity-render] headless Minecraft placeholder installed");
         } catch (Throwable t) {
-            log.accept("[entity-render] Minecraft placeholder install failed (client registration/rendering may NPE): " + t);
+            // Full chain: facade construction touches many vanilla classes; the exact
+            // throw site (not just its message) is what the next facade step needs.
+            log.accept("[entity-render] Minecraft placeholder install failed (client registration/rendering may NPE): " + fullChain(t));
         }
     }
 
@@ -752,6 +830,157 @@ public final class Legacy1165Lifecycle {
         } catch (Throwable t) {
             return null;
         }
+    }
+
+    /**
+     * Runs vanilla's OWN entity-renderer registration table on a headless
+     * {@code EntityRendererManager}, so the modded factories layered on afterwards by
+     * {@code RenderingRegistry.loadEntityRenderers} (and its trailing vanilla
+     * {@code validateRendererExistence}) see a complete manager exactly like production.
+     *
+     * involved): the vanilla manager constructor delegates registration to the private
+     * {@code func_229097_a_(ItemRenderer, IReloadableResourceManager)}, which builds
+     * every vanilla renderer with real constructors (the two non-trivial dependencies
+     * are {@code SpriteRenderer}/{@code ItemFrameRenderer}, which only STORE the
+     * {@code ItemRenderer}, and {@code VillagerRenderer}, which only stores the
+     * resource manager - all render-time uses). The item-render chain feeding it is
+     * built from real public constructors:
+     * {@code TextureManager(IResourceManager)},
+     * {@code ModelManager(TextureManager, BlockColors, maxMipmapLevels)},
+     * {@code ItemRenderer(TextureManager, ModelManager, ItemColors)} - with the
+     * placeholder's real colour registries when present, fresh ones otherwise, and
+     * mipmap level 0 (no mipmap generation can run headlessly).</p>
+     *
+     * <p>Honest limits: item/sprite-backed captures (snowballs, item frames, dropped
+     * items) resolve a renderer but still need a populated texture atlas at RENDER
+     * time (the atlas gap, documented separately) - registration succeeding is the
+     * claim here, matching what {@code validateRendererExistence} checks.</p>
+     */
+    private static void registerVanillaEntityRenderers(
+            net.minecraft.client.renderer.entity.EntityRendererManager mgr,
+            Consumer<String> log) {
+        try {
+            net.minecraft.resources.SimpleReloadableResourceManager resources =
+                    new net.minecraft.resources.SimpleReloadableResourceManager(
+                            net.minecraft.resources.ResourcePackType.CLIENT_RESOURCES);
+            net.minecraft.client.renderer.color.ItemColors itemColors =
+                    readPlaceholderColors(new net.minecraft.client.renderer.color.ItemColors(),
+                            "field_184128_aI",
+                            net.minecraft.client.renderer.color.ItemColors.class);
+            net.minecraft.client.renderer.color.BlockColors blockColors =
+                    readPlaceholderColors(new net.minecraft.client.renderer.color.BlockColors(),
+                            "field_184127_aH",
+                            net.minecraft.client.renderer.color.BlockColors.class);
+            net.minecraft.client.renderer.texture.TextureManager textures =
+                    new net.minecraft.client.renderer.texture.TextureManager(resources);
+            net.minecraft.client.renderer.model.ModelManager models =
+                    new net.minecraft.client.renderer.model.ModelManager(textures,
+                            blockColors, 0);
+            net.minecraft.client.renderer.ItemRenderer items =
+                    new net.minecraft.client.renderer.ItemRenderer(textures, models,
+                            itemColors);
+            Method vanillaRegister =
+                    net.minecraft.client.renderer.entity.EntityRendererManager.class
+                    .getDeclaredMethod("func_229097_a_",
+                            net.minecraft.client.renderer.ItemRenderer.class,
+                            net.minecraft.resources.IReloadableResourceManager.class);
+            vanillaRegister.setAccessible(true);
+            vanillaRegister.invoke(mgr, items, resources);
+            int vanilla = mgr.field_78729_o == null ? 0 : mgr.field_78729_o.size();
+            log.accept("[entity-render] vanilla entity renderers registered=" + vanilla);
+        } catch (Throwable t) {
+            log.accept("[entity-render] vanilla entity renderer registration failed (modded-only manager): "
+                    + firstCauseLines(t));
+        }
+    }
+
+    /**
+     * Reads a colour registry off the installed headless Minecraft placeholder when one
+     * is present (so renderer construction shares the exact registries mods register
+     * into), else keeps the caller-supplied fresh instance. Never creates or installs
+     * a placeholder itself.
+     */
+    @SuppressWarnings("unchecked")
+    private static <T> T readPlaceholderColors(T fresh, String field, Class<T> type) {
+        try {
+            Field instance = net.minecraft.client.Minecraft.class.getDeclaredField("field_71432_P");
+            instance.setAccessible(true);
+            Object minecraft = instance.get(null);
+            if (minecraft == null) return fresh;
+            Field colors = net.minecraft.client.Minecraft.class.getDeclaredField(field);
+            colors.setAccessible(true);
+            Object got = colors.get(minecraft);
+            if (type.isInstance(got)) return (T) got;
+        } catch (Throwable ignored) {
+        }
+        return fresh;
+    }
+
+    /**
+     * Populates a headless manager's skin map with REAL vanilla PlayerRenderers
+     * both the placeholder's manager and the capture manager need it.
+     */
+    private static void populateSkins(
+            net.minecraft.client.renderer.entity.EntityRendererManager mgr)
+            throws Exception {
+        java.util.Map<String, net.minecraft.client.renderer.entity.PlayerRenderer> skins =
+                new java.util.HashMap<String, net.minecraft.client.renderer.entity.PlayerRenderer>();
+        skins.put("default", new net.minecraft.client.renderer.entity.PlayerRenderer(
+                mgr, false));
+        skins.put("slim", new net.minecraft.client.renderer.entity.PlayerRenderer(
+                mgr, true));
+        setSkinMap(mgr, skins);
+    }
+
+    /**
+     * Points the installed placeholder's dispatcher field at the fully populated
+     * capture manager, so later {@code getEntityRenderDispatcher()} reads see
+     * vanilla + modded renderers (not the placeholder's registration-empty
+     * manager). Best-effort: never fails the boot, and never touches a real
+     * Minecraft (the placeholder identity is checked first).
+     */
+    private static void setPlaceholderDispatcher(
+            net.minecraft.client.renderer.entity.EntityRendererManager mgr,
+            Consumer<String> log) {
+        try {
+            if (!placeholderInstalledByUs) {
+                return;
+            }
+            Field instance = net.minecraft.client.Minecraft.class.getDeclaredField("field_71432_P");
+            instance.setAccessible(true);
+            Object minecraft = instance.get(null);
+            if (minecraft == null) {
+                return;
+            }
+            setInstanceField(minecraft, "field_175616_W", mgr);
+            log.accept("[entity-render] placeholder dispatcher rebound to populated manager");
+        } catch (Throwable t) {
+            log.accept("[entity-render] placeholder dispatcher rebind skipped: " + t);
+        }
+    }
+
+    /**
+     * Sets the {@code field_178636_l} skin map on a headless
+     * {@code EntityRendererManager} via {@code sun.misc.Unsafe} (same final-field
+     * reasoning as {@link #allocateHeadlessEntityRendererManager}). Mods read it
+     * through {@code getSkinMap()}; callers populate it with real renderers.
+     */
+    private static void setSkinMap(
+            net.minecraft.client.renderer.entity.EntityRendererManager mgr,
+            java.util.Map<String, net.minecraft.client.renderer.entity.PlayerRenderer> skins)
+            throws Exception {
+        Class<?> unsafeClass = Class.forName("sun.misc.Unsafe");
+        Field unsafeField = unsafeClass.getDeclaredField("theUnsafe");
+        unsafeField.setAccessible(true);
+        Object unsafe = unsafeField.get(null);
+        Field mapField = net.minecraft.client.renderer.entity.EntityRendererManager.class
+                .getDeclaredField("field_178636_l");
+        mapField.setAccessible(true);
+        Method objectFieldOffset = unsafeClass.getMethod("objectFieldOffset", Field.class);
+        Method putObject = unsafeClass.getMethod("putObject",
+                Object.class, long.class, Object.class);
+        long offset = ((Long) objectFieldOffset.invoke(unsafe, mapField)).longValue();
+        putObject.invoke(unsafe, mgr, offset, skins);
     }
 
     /**

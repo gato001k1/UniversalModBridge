@@ -89,6 +89,9 @@ final class LegacyGuiMouseDispatcher {
                         "field_110451_am", tickResources);
             }
             invokeNoArgs(session.gui, "func_73876_c");
+            // Refresh the focus cache on the server thread while the GUI is live:
+            // the client thread only ever reads the cached flag (see textFocused).
+            session.textFocusedCache = computeTextFocused(session.gui);
         } catch (Throwable t) {
             if (LegacyInputDiag.oncePer("gui-screen-tick:" + session.gui.getClass().getName(),
                     60_000_000_000L)) {
@@ -230,6 +233,9 @@ final class LegacyGuiMouseDispatcher {
                     System.err.println("[UMB-GUI] legacy mouse release failed for " + guiClass
                             + ": " + cause);
                 }
+                // A click can move focus between text fields; refresh the server-side
+                // cache while the GUI is live (see textFocused).
+                session.textFocusedCache = computeTextFocused(gui);
                 return true;
             } catch (Throwable t) {
                 Throwable cause = t;
@@ -292,6 +298,8 @@ final class LegacyGuiMouseDispatcher {
                                     .currentResourceManager(binding.minecraft));
                     set(GuiScreen.class, session.gui, "field_146297_k", binding.minecraft);
                     invokeKey(session.gui, typedChar, keyCode);
+                    // A key can move focus too (tab/enter); refresh while live.
+                    session.textFocusedCache = computeTextFocused(session.gui);
                     return true;
                 } catch (Throwable t) {
                     Throwable cause = t;
@@ -320,11 +328,25 @@ final class LegacyGuiMouseDispatcher {
     private static final java.util.Map<Class<?>, Field[]> TEXT_FIELDS =
             new java.util.concurrent.ConcurrentHashMap<Class<?>, Field[]>();
 
-    /** True while the live legacy screen holds a focused GuiTextField (direct field or array). */
+    /**
+     * Client-thread read of the focus state. The server thread recomputes the cached
+     * flag after every tick, click and key on the live session; walking the legacy
+     * GUI's GuiTextFields here would race the server thread mutating them, so this
+     * only ever reads the session's volatile flag (false when there is no session).
+     */
     static boolean textFocused() {
         ClientGuiSession session = activeSession;
-        if (session == null) return false;
-        Object gui = session.gui;
+        return session != null && session.textFocusedCache;
+    }
+
+    /**
+     * Server-thread computation of the focus state: true while the given GUI holds a
+     * focused GuiTextField (direct field or array). Runs only where the session GUI
+     * is already live on this thread (tick/dispatch/dispatchKey), never on the
+     * client thread. Package-visible for the unit test.
+     */
+    static boolean computeTextFocused(Object gui) {
+        if (gui == null) return false;
         Field[] fields = TEXT_FIELDS.get(gui.getClass());
         if (fields == null) {
             java.util.List<Field> found = new java.util.ArrayList<Field>();
@@ -595,6 +617,13 @@ final class LegacyGuiMouseDispatcher {
         final int xSize;
         final int ySize;
         volatile dev.umb.bridge.api.GlEmulationSession.Mesh mesh;
+        /**
+         * Server-thread focus snapshot, recomputed after every tick/click/key on the
+         * live GUI. The client thread (UmbLegacyScreen key handling via the bridge)
+         * reads only this volatile flag and never walks the mod-owned text fields
+         * the server thread mutates. False for a fresh session until its first tick.
+         */
+        volatile boolean textFocusedCache;
         /** Panel origin the screen was last laid out (initGui) at. */
         int initLeft, initTop;
         /** The legacy Container this screen was opened for (the player's open container then). */

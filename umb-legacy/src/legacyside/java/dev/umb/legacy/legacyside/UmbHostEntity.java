@@ -76,6 +76,28 @@ final class UmbHostEntity extends EntityLivingBase {
         refreshState();
     }
 
+    /**
+     * mountEntity (1.7.10 real vanilla; called ON the rider, per EntityHandleImpl's own confirmed
+     * comment - it sets both sides, this.field_70154_o and entityIn.field_70153_n).  A fresh
+     * per-query facade must never become an actual rider of a legacy entity: it is never "a host
+     * passenger really riding its twin" (its own class javadoc: intentionally not tracked, a new
+     * instance every AABB query), so accepting a mount here would let a legacy entity end up with
+     * a rider that no dismount/setHostRider(null) call will ever clear.
+     *
+     * This closes the mcheli-seats phantom-rider bug at its second layer (see
+     * UmbLegacyPartTwin collider reaching legacy AABB scans and being auto-mounted by MCHeli's own
+     * mountMobToSeats (fixed at the source in HostWorldImpl.getEntities). Refusing the mount here
+     * too is defense in depth - it protects against ANY legacy mod's "auto-mount a nearby
+     * EntityLivingBase" pattern finding a UmbHostEntity through some other AABB path, universally,
+     * not just MCHeli's one call site.
+     */
+    @Override
+    public void func_70078_a(net.minecraft.entity.Entity entityIn) {
+        ((UmbWorld) field_70170_p).host().log("ENTITY-DIAG host facade mount refused identity="
+                + hostIdentity() + " target="
+                + (entityIn == null ? "null" : entityIn.getClass().getName()));
+    }
+
     @Override
     protected void func_70088_a() {
         super.func_70088_a();

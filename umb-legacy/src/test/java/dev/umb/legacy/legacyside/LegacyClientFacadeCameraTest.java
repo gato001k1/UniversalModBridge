@@ -44,6 +44,35 @@ public final class LegacyClientFacadeCameraTest {
         assertTrue(Float.isNaN(LegacyClientFacade.thirdPersonDistance(null)));
     }
 
+    /**
+     * Bug #29: a render-thread singleton read landing between install()'s static
+     * singleton publish and its service bind saw field_71446_o null and died in
+     * vanilla RenderItem's missing-icon path (Minecraft.func_110434_K() null).
+     * install() must seed the shared services before publishing, so the fresh
+     * facade is drawable the moment it becomes observable.
+     */
+    @Test
+    public void freshFacadeIsServiceBoundBeforeItIsPublished() throws Exception {
+        java.lang.reflect.Field shared = LegacyClientFacade.class.getDeclaredField(
+                "CLIENT_TEXTURE_MANAGER");
+        shared.setAccessible(true);
+        Object previous = shared.get(null);
+        // Headless-safe: the vanilla 1.7.10 TextureManager constructor only allocates
+        // its maps; the resource load happens in func_110549_a, which we never call.
+        net.minecraft.client.renderer.texture.TextureManager probe =
+                new net.minecraft.client.renderer.texture.TextureManager(null);
+        shared.set(null, probe);
+        try {
+            LegacyClientFacade.Binding binding = LegacyClientFacade.install(null, null);
+            assertTrue(binding.minecraft == net.minecraft.client.Minecraft.func_71410_x(),
+                    "install() must publish the facade as the static singleton");
+            assertTrue(binding.minecraft.func_110434_K() == probe,
+                    "the published facade must already carry the shared TextureManager");
+        } finally {
+            shared.set(null, previous);
+        }
+    }
+
     private static void writeThirdPersonDistance(LegacyClientFacade.Binding binding, float value)
             throws Exception {
         java.lang.reflect.Field renderer = null;

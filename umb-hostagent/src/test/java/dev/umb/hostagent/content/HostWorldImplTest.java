@@ -271,7 +271,6 @@ class HostWorldImplTest {
         assertTrue(state.allowLegacyMirror(null));
     }
 
-    // ---------------------------------------------------------------- drops-waterlogged lane
 
     @Test
     void waterloggedStairsReadsAsWater() {
@@ -299,5 +298,46 @@ class HostWorldImplTest {
         world.dropItem(0.5D, 64.5D, 0.5D, dev.umb.bridge.api.StackData.EMPTY);
         world.dropItem(0.5D, 64.5D, 0.5D,
                 new dev.umb.bridge.api.StackData("umbtest:unmapped_drop", 1, 0, null));
+    }
+
+    // ------------------------------------------------ ENTITY-BRIDGE: getEntities native AABB scan
+    //
+    // UmbLegacyPartTwin (a per-collision-box native collider, e.g. one MCH_EntitySeat's own
+    // extra hitbox) was missing from getEntities' native-entity filter - only Player and
+    // UmbLegacyEntity were excluded - so it leaked into legacy AABB scans as a generic "wild"
+    // HostEntity. MCHeli's real MCH_EntityAircraft.mountMobToSeats (called once, server-side,
+    // right after a player boards as pilot) scans exactly such a box for stray EntityLivingBase
+    // mobs to auto-crew into empty seats, excludes real EntityPlayers by instanceof, but had no
+    // way to know the leaked facade was a collision-box shadow of the very aircraft it was
+    // scanning around - so it auto-mounted it into the empty gunner seat, producing the
+    // ("directPassenger=dev.umb.legacy.legacyside.UmbHostEntity@..."). This pins the extracted
+    // filter predicate directly - a real ServerLevel AABB scan is not possible headlessly (same
+    // R8 constraint as setBlock/setMeta/spawnEntity above).
+
+    @Test
+    void queryableNativeEntityExcludesPlayersAndBothLegacyTwinFlavors() {
+        net.minecraft.server.level.ServerPlayer player =
+                TestSupport.allocate(net.minecraft.server.level.ServerPlayer.class);
+        UmbLegacyEntity legacyTwin = TestSupport.allocate(UmbLegacyEntity.class);
+        UmbLegacyPartTwin partTwin = TestSupport.allocate(UmbLegacyPartTwin.class);
+        // A concrete, otherwise-unrelated Entity subclass standing in for "a genuinely wild
+        // native entity" (e.g. Pig) - the actual mob class does not matter to the filter, only
+        // that it is NOT one of the three excluded categories.
+        net.minecraft.world.entity.LightningBolt wildEntity =
+                TestSupport.allocate(net.minecraft.world.entity.LightningBolt.class);
+
+        assertFalse(HostWorldImpl.isQueryableNativeEntity(player, null),
+                "a real player is already exposed as the legacy side's own UmbPlayer facade");
+        assertFalse(HostWorldImpl.isQueryableNativeEntity(legacyTwin, null),
+                "a legacy entity's own host twin must not be exposed back to legacy code as a stray HostEntity");
+        assertFalse(HostWorldImpl.isQueryableNativeEntity(partTwin, null),
+                "a part-twin collider is exactly the mcheli-seats phantom-rider leak (seats-live.md SS D)");
+        assertTrue(HostWorldImpl.isQueryableNativeEntity(wildEntity, null),
+                "a genuinely wild native entity must still reach legacy AABB scans (real-mob auto-crew stays faithful)");
+    }
+
+    @Test
+    void queryableNativeEntityRejectsANullEntity() {
+        assertFalse(HostWorldImpl.isQueryableNativeEntity(null, null));
     }
 }

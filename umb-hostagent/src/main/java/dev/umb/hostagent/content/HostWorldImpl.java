@@ -300,8 +300,6 @@ final class HostWorldImpl implements HostWorld, HostLevel {
      * Live block state for a FULLY loaded chunk, or null. Never loads or generates a chunk:
      * legacy reads arrive from inside chunk post-load (LevelChunk.runPostLoad -> BlockEntity.setLevel
      * -> createTile -> getMeta), and a blocking Level.getChunkAt/getBlockState there waits on the
-     * very chunk being loaded -> permanent server-thread deadlock (live 2026-09-25 05:42, jstack in
-     *). javap 26.2: ServerLevel.getChunkSource() -> ServerChunkCache,
      * ChunkSource.getChunkNow(int,int) -> LevelChunk (null unless FULL), LevelChunk.getBlockState(BlockPos).
      * A loaded chunk returns its current state, which also covers the pad-fill race.
      */
@@ -585,7 +583,7 @@ final class HostWorldImpl implements HostWorld, HostLevel {
 
     /**
      * ENTITY-BRIDGE: expose native entities to legacy AABB queries.  The legacy side already owns
-     * facades for players and UMB's generic legacy twins, so those two native categories are
+     * facades for players and UMB's generic legacy twins, so those three native categories are
      * filtered here to prevent duplicate hits.  The returned objects are capability wrappers;
      * no native Entity crosses the bridge.
      */
@@ -597,11 +595,7 @@ final class HostWorldImpl implements HostWorld, HostLevel {
         try {
             AABB box = new AABB(minX, minY, minZ, maxX, maxY, maxZ);
             java.util.List<Entity> nativeEntities = level.getEntities((Entity) null, box,
-                    e -> !e.isRemoved()
-                            && !(e instanceof Player)
-                            && !(e instanceof UmbLegacyEntity)
-                            && (excludedIdentity == null
-                                || !excludedIdentity.equals(e.getStringUUID())));
+                    e -> isQueryableNativeEntity(e, excludedIdentity));
             java.util.List<HostEntity> result = new java.util.ArrayList<>(nativeEntities.size());
             for (Entity nativeEntity : nativeEntities) {
                 result.add(new HostNativeEntity(nativeEntity, level));
@@ -613,7 +607,31 @@ final class HostWorldImpl implements HostWorld, HostLevel {
         }
     }
 
-    // ---- PRESENTATION lane: sound / particle / explosion / redstone ----
+    /**
+     * per-collision-box native collider that mirrors ONE extra hitbox of a legacy entity (see its
+     * own javadoc) - it carries no legacy class identity, never ticks legacy state, and every
+     * interaction/damage decision delegates back to its parent {@code UmbLegacyEntity}. It was
+     * missing from this filter (only {@code Player}/{@code UmbLegacyEntity} were excluded), so a
+     * seat's own part-twin collider leaked into legacy AABB scans as a generic "wild" HostEntity.
+     * MCHeli's real {@code MCH_EntityAircraft.mountMobToSeats} (called once, server-side, right
+     * after a player boards as pilot) scans exactly such a box for stray {@code EntityLivingBase}
+     * mobs to auto-crew into empty seats; it excludes real {@code EntityPlayer}s by
+     * {@code instanceof} but had no way to know a returned facade was actually a collision-box
+     * shadow of the SAME aircraft/seat it was scanning around, so it auto-mounted the leaked
+     * facade into the empty gunner seat - the confirmed phantom
+     * A part-twin has no independent identity or riding semantics at all (its own javadoc: "never
+     * carry riders"), so it must never be offered to legacy code as a queryable entity, exactly
+     * like the two categories already excluded above.
+     */
+    static boolean isQueryableNativeEntity(Entity e, String excludedIdentity) {
+        return e != null
+                && !e.isRemoved()
+                && !(e instanceof Player)
+                && !(e instanceof UmbLegacyEntity)
+                && !(e instanceof UmbLegacyPartTwin)
+                && (excludedIdentity == null || !excludedIdentity.equals(e.getStringUUID()));
+    }
+
 
     @Override
     public void enqueueClientEffect(EffectData effect) {
@@ -743,7 +761,6 @@ final class HostWorldImpl implements HostWorld, HostLevel {
      * Entity reaches {@code World.spawnEntityInWorld} for real. Constructs the one generic native
      * twin, seeds its initial transform from the handle (single source of truth - no duplicate
      * position parameters to keep in sync), and adds it to the level exactly the way vanilla's own
-     * {@code EntityType} bootstrap does (javap-verified, ENTITY-LANE.md).
      */
     @Override
     public boolean spawnEntity(EntityHandle handle) {
