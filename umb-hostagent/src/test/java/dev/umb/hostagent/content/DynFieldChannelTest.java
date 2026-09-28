@@ -92,6 +92,10 @@ class DynFieldChannelTest {
             System.clearProperty("umb.repo");
             System.clearProperty("umb.legacy.dynamicsSidecar");
             DynLiveBounds.resetForTests();
+            // Needs the sidecar generated from a local mod corpus; skip on clean checkouts.
+            org.junit.jupiter.api.Assumptions.assumeTrue(java.nio.file.Files.isRegularFile(
+                    java.nio.file.Paths.get("research/out/legacy/rendermap/renderer-dynamic-ops.json")),
+                    "renderer-dynamic-ops.json not present in this checkout");
             assertTrue(DynLiveBounds.isLiveBounds("hbm:tile.sliding_blast_door"),
                     "registry-time sidecar lookup must not depend on lazy UmbUniverse boot");
         } finally {
