@@ -363,7 +363,7 @@ class UmbBuild {
     private List<String> ciCorpusExcludes(Path testSrc) throws Exception {
         List<String> out = new ArrayList<>();
         if (System.getenv("CI") == null || !Files.isDirectory(testSrc)) return out;
-        Pattern needsCorpus = Pattern.compile("research[/\\\\]+(out|mods-)");
+        Pattern needsCorpus = Pattern.compile("research(?:[/\\\\]+|\"\\s*,\\s*\")(out|mods-)");
         try (Stream<Path> s = Files.walk(testSrc)) {
             for (Path p : s.filter(x -> x.toString().endsWith(".java")).toList()) {
                 if (!needsCorpus.matcher(Files.readString(p)).find()) continue;
