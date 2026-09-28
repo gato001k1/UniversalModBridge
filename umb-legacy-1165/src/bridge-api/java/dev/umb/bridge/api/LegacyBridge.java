@@ -119,7 +119,6 @@ public interface LegacyBridge {
      */
     EntityHandle restoreEntity(byte[] nbt);
 
-    // ---- TICK/CONTACT lane: block ticks + entity-inside, the two block callbacks that make
     // fluids flow, fire spread, gases rise, and conveyors/gas/spikes act on the player. Both have
     // no-op defaults ONLY so eras/fakes that have not bridged them yet (umb-legacy-1122, test
     // fakes) keep compiling - the real 1.7.10 LegacyBridgeImpl overrides both.
@@ -146,7 +145,6 @@ public interface LegacyBridge {
     // ---- BLOCK SURFACE: placement, drops, contact, client display and comparator ------------
 
     /**
-     * Door-live lane: the legacy block's live collision bounds
      * ({@code Block.getCollisionBoundingBoxFromPool}, 1.7.10) for one cell, for blocks
      * whose bounds genuinely depend on tile-entity state (doors, hatches - never guessed:
      * the host only calls this for block ids the extract-time sidecar flags as
@@ -317,7 +315,6 @@ public interface LegacyBridge {
 
     /**
      * Last third-person camera distance (in blocks) written by legacy client code into its own
-     * EntityRenderer (1.7.10 {@code field_78490_B}/{@code thirdPersonDistance}, javap-verified on
      * the 1.7.10 SRG runtime; legacy mods write it through the client facade's EntityRenderer).
      * Captured after the bounded legacy client tick, per player name, like {@link #cameraState}.
      * Returns NaN when no legacy client tick has recorded one (honest absence, never a guess) -
@@ -353,6 +350,20 @@ public interface LegacyBridge {
      */
     default boolean guiMouseClick(String guiClass, int x, int y, int z,
                                   int guiX, int guiY, int button, int screenX, int screenY) {
+        return false;
+    }
+
+    /**
+     * Delivers one legacy GuiScreen key event - the LWJGL-2 {@code keyTyped(char, keyCode)} pair -
+     * to the live legacy GUI of the host menu, so the mod's own text fields and key shortcuts
+     * handle it exactly as they would on a real client.
+     */
+    default boolean guiKeyTyped(String guiClass, char typedChar, int keyCode) {
+        return false;
+    }
+
+    /** True while the live legacy GUI has a focused text field (typing must not close it). */
+    default boolean guiTextFocused() {
         return false;
     }
 

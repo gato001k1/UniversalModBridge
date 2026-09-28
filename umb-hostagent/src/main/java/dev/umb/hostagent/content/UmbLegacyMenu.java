@@ -51,7 +51,6 @@ public final class UmbLegacyMenu extends AbstractContainerMenu {
     }
 
     static void stashGuiMesh(int containerId, dev.umb.bridge.api.GlEmulationSession.Mesh mesh) {
-        // Empty capture is not proof that the legacy GUI has no panel; it can also mean a
         // facade/resource failure. Keep the existing profile texture/fallback visible in that
         // case rather than turning a transient capture problem into a blank screen.
         // A failed frame keeps the last good mesh: dropping it made the screen alternate between
@@ -336,7 +335,6 @@ public final class UmbLegacyMenu extends AbstractContainerMenu {
         Slot slot = index >= 0 && index < this.slots.size() ? this.slots.get(index) : null;
         if (slot == null || !slot.hasItem()) return ItemStack.EMPTY;
 
-        // 26.2's moveItemStackTo is a raw first-fit helper (javap against client.jar: it has no
         // Slot.mayPlace call), so it can put ore into a fuel slot.  Let the legacy Container own
         // transferStackInSlot/func_82846_b whenever the real handle supports it; null means an
         // older/fake handle and retains the bounded native fallback below.  An empty result is
@@ -390,7 +388,6 @@ public final class UmbLegacyMenu extends AbstractContainerMenu {
     }
 
     /**
-     * Vanilla calls this once per server tick per player with this menu open (javap-verified:
      * loops {@code Slot.getItem()} over every slot to detect+sync changes). Invalidate
      * {@link LegacyContainerAdapter}'s per-pass read cache BEFORE the vanilla loop runs so the
      * machine-slot side of that loop costs exactly one {@code ContainerHandle.slots()} call for
@@ -404,7 +401,6 @@ public final class UmbLegacyMenu extends AbstractContainerMenu {
         if (machineContainer instanceof LegacyContainerAdapter adapter) {
             adapter.invalidateCache();
         }
-        // TILE-FIELD-SNAPSHOT lane: refresh the per-tile-entity gauge/guard snapshot AT TICK RATE,
         // not per rendered frame — the correctness risk the brief calls out explicitly. This is the
         // ONE cross-loader TileHandle.snapshotFields call per open GUI per tick; UmbLegacyScreen
         // only ever reads the cached result (see currentTileFieldLookup(), TileSnapshotChannel).
@@ -463,6 +459,13 @@ public final class UmbLegacyMenu extends AbstractContainerMenu {
 
     @Override
     public boolean clickMenuButton(Player player, int id) {
+        if (LegacyGuiClickChannel.isKeyRequest(id)) {
+            LegacyGuiClickChannel.KeyRequest request = LegacyGuiClickChannel.takeKey(id);
+            if (request == null) return false;
+            dev.umb.bridge.api.LegacyBridge bridge = UmbBridgeHost.get();
+            return bridge != null && bridge.guiKeyTyped(packetGuiClass, request.typedChar,
+                    request.keyCode);
+        }
         if (LegacyGuiClickChannel.isRequest(id)) {
             LegacyGuiClickChannel.Request request = LegacyGuiClickChannel.take(id);
             if (request == null) return false;
@@ -471,7 +474,6 @@ public final class UmbLegacyMenu extends AbstractContainerMenu {
                     request.guiX, request.guiY, request.button, request.screenX, request.screenY);
         }
         // 26.2's ServerboundContainerButtonClickPacket is dispatched by the vanilla server to
-        // this AbstractContainerMenu hook (javap-verified).  The legacy player object is retained
         // privately by ContainerHandleImpl; the resolver invokes only the SRG-grounded
         // func_75140_a/enchantItem(Player,int) route and returns false when absent.
         if (handle != null && LegacyContainerClassResolver.dispatchButton(handle, id)) return true;
@@ -493,7 +495,6 @@ public final class UmbLegacyMenu extends AbstractContainerMenu {
     }
 
     /**
-     * TILE-FIELD-SNAPSHOT lane: a per-FRAME cache for {@link UmbLegacyScreen}'s render loop — fetch
      * once per {@code extractBackground}/{@code extractLabels} call (a single
      * {@link TileSnapshotChannel#get} map read, never a cross-loader call), then re-use the returned
      * closure across every rect/label/guard this GUI draws that frame. The underlying value is only
@@ -517,7 +518,6 @@ public final class UmbLegacyMenu extends AbstractContainerMenu {
     /** CONTAINER-POLICY lane: a machine slot that enforces the legacy mod's own
      *  {@code Slot.isItemValid} (func_75214_a) via {@link ContainerHandle#canPlace} -- 26.2's
      *  {@code doClick} (5 call sites) and {@code moveItemStackTo} both consult {@code mayPlace}
-     *  (javap-verified on the real client.jar), so this covers normal clicks AND shift-clicks
      *  with no further plumbing. A null handle is the CLIENT-side mirror: stays permissive, the
      *  server menu is authoritative and vanilla resyncs a rejected click. A native stack
      *  {@link LegacyStackConv} cannot map (StackData.EMPTY from a non-empty input) is REJECTED:

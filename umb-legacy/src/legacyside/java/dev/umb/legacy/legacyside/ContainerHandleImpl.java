@@ -11,8 +11,18 @@ import dev.umb.bridge.api.SlotData;
 import dev.umb.bridge.api.StackData;
 
 /**
- * {@code dev.umb.bridge.api.ContainerHandle} over a raw legacy {@code Container} .
- * Machine slots are every {@link Slot} in {@code container.field_75151_b} whose backing {@code IInventory} (`field_75224_c`) is NOT the {@link UmbPlayer}'s own {@link...
+ * {@code dev.umb.bridge.api.ContainerHandle} over a raw legacy {@code Container} (DESIGN.md LANE A
+ * step 5/6, facade-fidelity.md section 7). Machine slots are every {@link Slot} in
+ * {@code container.field_75151_b} whose backing {@code IInventory} (`field_75224_c`) is NOT the
+ * {@link UmbPlayer}'s own {@link UmbInventoryPlayer} - "player slots are host-side" (THE BOUNDARY
+ * CONTRACT). {@link #slots()}/{@link #setSlot}/{@link #takeSlot} index into that MACHINE-ONLY
+ * subset, 0-based, in {@code field_75151_b} order - not the container's own (player-slots-included)
+ * indices.
+ *
+ * {@code field_75223_e} = xDisplayPosition (arg 3), {@code field_75221_f} = yDisplayPosition
+ * (arg 4) - {@code field_75225_a} (getSlotIndex()) and {@code field_75222_d} are inventory-local /
+ * container-local indices, neither of which this handle exposes (the machine-only 0-based index is
+ * simpler and sufficient for M1).</p>
  */
 public final class ContainerHandleImpl implements ContainerHandle {
 
@@ -109,9 +119,15 @@ public final class ContainerHandleImpl implements ContainerHandle {
     }
 
     /**
- * Delegates shift-click to the legacy container's own transfer policy.
- * The host menu presents machine slots first and then the player slots in the raw legacy container's order (the same order used by LegacyContainerClassResolver.resolvePlayerSlots), so the...
- */
+     * Delegates shift-click to the legacy container's own transfer policy.  The host menu presents
+     * machine slots first and then the player slots in the raw legacy container's order (the same
+     * order used by LegacyContainerClassResolver.resolvePlayerSlots), so the bounded translation
+     * below reaches the exact raw slot index expected by func_82846_b/transferStackInSlot.
+     *
+     * func_82846_b is grounded by fml/conf/methods.csv:2604.  Pull/push brackets the call because
+     * the legacy Container reads the UmbPlayer inventory directly, while the 26.2 Inventory is
+     * authoritative between bridge calls.
+     */
     @Override
     public StackData quickMove(int menuIndex, int machineSlotCount) {
         if (machineSlotCount != machineSlots.size()
@@ -142,9 +158,14 @@ public final class ContainerHandleImpl implements ContainerHandle {
     }
 
     /**
- * The host menu orders player slots by the 26.2 Inventory's local index (0..35).
- * A legacy container is free to order the same slots as main inventory first (9..35) and hotbar last (0..8).
- */
+     * The host menu orders player slots by the 26.2 Inventory's local index (0..35).  A legacy
+     * container is free to order the same slots as main inventory first (9..35) and hotbar last
+     * (0..8).  Using {@code playerSlots.get(hostIndex)} therefore targets the wrong legacy Slot
+     * for the most common furnace/container layout.  Slot.func_75217_a(IInventory,int) is the
+     * grounded inventory-local index predicate; use it as the stable cross-era key and retain the
+     * raw list only for the final container index passed to func_82846_b.  This also avoids
+     * reaching Slot.field_75225_a directly because that legacy field is private in the runtime.
+     */
     private Slot playerSlotByInventoryIndex(int inventoryIndex) {
         if (inventoryIndex < 0 || inventoryIndex >= 36) return null;
         for (Slot slot : playerSlots) {
@@ -157,7 +178,7 @@ public final class ContainerHandleImpl implements ContainerHandle {
     public void close() {
         if (closed) return;
         closed = true;
-        LegacyGuiMouseDispatcher.close(player);
+        LegacyGuiMouseDispatcher.close(player, container);
         try {
             container.func_75134_a(player);
         } catch (Throwable t) {

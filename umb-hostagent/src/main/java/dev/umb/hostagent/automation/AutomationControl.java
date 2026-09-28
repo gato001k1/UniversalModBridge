@@ -101,7 +101,6 @@ public final class AutomationControl {
             // Uniform exact-path write (NOT Screenshot.grab: grab always inserts a
             // "screenshots/" segment and timestamp-names, so it can never hit an exact .png
             // path - and its async name can't be echoed truthfully). takeScreenshot hands us
-            // the NativeImage; writeToFile lands byte-exactly at target. Both public, javap-verified.
             Minecraft mc = Minecraft.getInstance();
             Screenshot.takeScreenshot(mc.gameRenderer.mainRenderTarget(), image -> {
                 try { image.writeToFile(target); }
@@ -127,7 +126,6 @@ public final class AutomationControl {
             o.addProperty("title", s.getTitle() == null ? "" : s.getTitle().getString());
             if (s instanceof AbstractContainerScreen<?> acs) {
                 // imageWidth/imageHeight/leftPos/topPos are protected with no public getters
-                // (javap-verified) - read reflectively, report null per field on failure, never a guess.
                 o.add("imageWidth", box(containerInt(acs, "imageWidth")));
                 o.add("imageHeight", box(containerInt(acs, "imageHeight")));
                 o.add("leftPos", box(containerInt(acs, "leftPos")));
@@ -145,6 +143,35 @@ public final class AutomationControl {
             }
             return o;
         });
+        if (cmd.equals("gui_type")) {
+            // Types through the open screen's own charTyped/keyPressed (the path real keystrokes
+            // take), so text entry is testable without OS-level input. args: text, keys (GLFW).
+            JsonObject args = r.has("args") && r.get("args").isJsonObject() ? r.getAsJsonObject("args") : r;
+            String text = args.has("text") ? args.get("text").getAsString() : "";
+            com.google.gson.JsonArray keys = args.has("keys") && args.get("keys").isJsonArray()
+                    ? args.getAsJsonArray("keys") : new com.google.gson.JsonArray();
+            return onClient(() -> {
+                Minecraft mc = Minecraft.getInstance();
+                Screen screen = (mc == null || mc.gui == null) ? null : mc.gui.screen();
+                if (screen == null) throw new IllegalStateException("gui_type requires an open screen");
+                JsonObject o = new JsonObject();
+                o.addProperty("screen", screen.getClass().getName());
+                o.addProperty("legacyTextFocused",
+                        dev.umb.hostagent.content.UmbLegacyScreen.legacyTextFocused());
+                int typed = 0, consumed = 0;
+                for (int i = 0; i < text.length(); i++) {
+                    typed++;
+                    if (screen.charTyped(new net.minecraft.client.input.CharacterEvent(text.charAt(i)))) consumed++;
+                }
+                for (com.google.gson.JsonElement k : keys) {
+                    typed++;
+                    if (screen.keyPressed(new net.minecraft.client.input.KeyEvent(k.getAsInt(), 0, 0))) consumed++;
+                }
+                o.addProperty("typed", typed);
+                o.addProperty("consumed", consumed);
+                return o;
+            });
+        }
         if (cmd.equals("gui_click")) {
             GuiClickRequest click = parseGuiClick(r);
             return onClient(() -> {
@@ -196,7 +223,6 @@ public final class AutomationControl {
         if (cmd.equals("open_create_world")) return onClient(() -> {
             // Title-screen button focus order varies (toasts, accessibility buttons), so blind
             // Tab/Enter navigation sometimes opened Options instead. Open the Create New World
-            // screen directly (javap: public static CreateWorldScreen.openFresh(Minecraft, Runnable));
             // "back" returns to the title screen.
             Minecraft mc = Minecraft.getInstance();
             net.minecraft.client.gui.screens.worldselection.CreateWorldScreen.openFresh(mc,
@@ -206,7 +232,6 @@ public final class AutomationControl {
         if (cmd.equals("close_menu")) return onClient(() -> {
             Minecraft mc = Minecraft.getInstance();
             if (mc == null || mc.gui == null || mc.gui.screen() == null) return new JsonPrimitive(false);
-            // javap-verified Gui.setScreen body: calls removed() on the old screen, then clears
             // (TitleScreen fallback only applies with no level loaded, which can't happen here).
             mc.gui.setScreen(null);
             return new JsonPrimitive(true);
@@ -220,7 +245,6 @@ public final class AutomationControl {
     /**
      * Maps a screenshot {path} to the exact file that will be written. A directory (or any
      * non-.png path) means "<dir>/screenshots/umb-<vanilla timestamp>[-n].png" - vanilla's own
-     * layout and clock (Util.getFilenameFormattedDateTime, javap-verified public), our own
      * umb- prefix so automation shots never collide with manual F2 shots; an exact .png path
      * is honored verbatim. Pure path computation (reads only), so unit-testable headlessly.
      */
@@ -334,7 +358,6 @@ public final class AutomationControl {
     }
 
     /**
-     * Door-live lane: {@code legacy_tile {pos}} dumps the core legacy tile entity's class
      * plus every declared instance field (name, type, display value) through the live
      * {@code TileHandle} on the SERVER thread. Bounded output (the handle caps field count
      * and value length); unreadable fields report present=false. A missing block entity, a

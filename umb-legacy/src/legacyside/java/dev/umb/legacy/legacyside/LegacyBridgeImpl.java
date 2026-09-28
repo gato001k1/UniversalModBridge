@@ -1664,6 +1664,17 @@ public final class LegacyBridgeImpl implements LegacyBridge {
                 screenX, screenY);
     }
 
+    @Override
+    public boolean guiKeyTyped(String guiClass, char typedChar, int keyCode) {
+        ensureBooted();
+        return LegacyGuiMouseDispatcher.dispatchKey(guiClass, typedChar, keyCode);
+    }
+
+    @Override
+    public boolean guiTextFocused() {
+        return booted && LegacyGuiMouseDispatcher.textFocused();
+    }
+
     private void ensureBooted() {
         if (!booted) {
             throw new IllegalStateException("the legacy universe has not been booted yet");

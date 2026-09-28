@@ -447,7 +447,6 @@ public abstract class LegacyEraUniverse implements LegacyBridge {
         forwardVoid("playerRespawn", "", r -> r.playerRespawn(player));
     }
 
-    // These override inherited no-op defaults (covered by BridgeDelegatesOverrideAllTest).
     @Override
     public boolean acceptInput(HostPlayer player, dev.umb.bridge.api.InputData input) {
         LegacyBridge r = peek();
@@ -565,6 +564,18 @@ public abstract class LegacyEraUniverse implements LegacyBridge {
         return r != null && r.guiMouseClick(guiClass, x, y, z, guiX, guiY, button, screenX, screenY);
     }
 
+    @Override
+    public boolean guiKeyTyped(String guiClass, char typedChar, int keyCode) {
+        LegacyBridge r = peek();
+        return r != null && r.guiKeyTyped(guiClass, typedChar, keyCode);
+    }
+
+    @Override
+    public boolean guiTextFocused() {
+        LegacyBridge r = peek();
+        return r != null && r.guiTextFocused();
+    }
+
     private void forwardVoid(String what, String id, java.util.function.Consumer<LegacyBridge> call) {
         LegacyBridge r = peek();
         if (r == null) return;
@@ -620,8 +631,7 @@ public abstract class LegacyEraUniverse implements LegacyBridge {
         if (prop != null && !prop.isEmpty()) {
             return new File(prop).getAbsoluteFile();
         }
-        // Same derivation as UmbUniverse.repoRoot (duplicated to keep this class
-        // self-contained): <repo>/build/hostagent/umb-hostagent.jar.
+        // Same derivation as UmbUniverse.repoRoot (duplicated, not refactored, to keep this
         try {
             java.security.CodeSource cs =
                     LegacyEraUniverse.class.getProtectionDomain().getCodeSource();

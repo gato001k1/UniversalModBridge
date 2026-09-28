@@ -574,6 +574,7 @@ public final class LegacyClientFacade {
         setField(minecraft, Minecraft.class, "field_71452_i", effectRenderer);
         setField(minecraft, Minecraft.class, "field_135017_as",
                 UmbUnsafe.allocate(net.minecraft.client.resources.LanguageManager.class));
+        seedClientI18n(null);
         UmbUnsafe.setField(minecraft, field(Minecraft.class, "field_71412_D"), new File("."));
 
         // WorldClient is the client twin; its SRG isRemote flag must be true so generic client
@@ -1303,6 +1304,7 @@ public final class LegacyClientFacade {
             setField(minecraft, Minecraft.class, "field_71464_q", CLIENT_FONT_RENDERER);
             ensureItemBlockAtlases(CLIENT_TEXTURE_MANAGER, resources);
             exportVanillaGuiArt();
+            seedClientI18n(resources);
             if (LegacyInputDiag.oncePer("client-render-services-ready", 0)) {
                 LegacyInputDiag.log("client render services ready font="
                         + CLIENT_FONT_RENDERER.getClass().getName() + " texture="
@@ -1961,6 +1963,71 @@ public final class LegacyClientFacade {
             }
         } catch (Throwable ignored) {
             // A host-side fake need not expose every vanilla field; absent mirror data is honest.
+        }
+    }
+
+    private static volatile Object I18N_RESOURCES;
+
+    /**
+     * Client I18n: a real client's LanguageManager installs I18n's static Locale on resource
+     * reload; the synthetic client never reloads, so every GUI that calls I18n.format (titles,
+     * labels, tooltips) threw an NPE and its whole capture was lost. The Locale is loaded the
+     * vanilla way - lang/en_US.lang from every domain of the client resource manager (vanilla
+     * client strings plus each mod's lang file) - then topped up with FML's runtime-registered
+     * names and the server StringTranslate table for keys the files do not define. Reloaded when
+     * the resource manager changes; a failure is logged once and never blocks the facade.
+     */
+    private static void seedClientI18n(IResourceManager resources) {
+        try {
+            Field localeField = field(net.minecraft.client.resources.I18n.class, "field_135054_a");
+            if (localeField.get(null) != null && (resources == null || resources == I18N_RESOURCES)) {
+                return;
+            }
+            net.minecraft.client.resources.Locale locale = new net.minecraft.client.resources.Locale();
+            int fromFiles = 0;
+            if (resources != null) {
+                try {
+                    List<String> langs = new ArrayList<String>();
+                    langs.add("en_US");
+                    locale.func_135022_a(resources, langs);
+                } catch (Throwable t) {
+                    System.out.println("[UMB-LEGACY] client I18n lang files failed (non-fatal): " + t);
+                }
+            }
+            Object props = readField(locale, net.minecraft.client.resources.Locale.class, "field_135032_a");
+            if (props instanceof Map) {
+                @SuppressWarnings("unchecked") Map<String, String> map = (Map<String, String>) props;
+                fromFiles = map.size();
+                try {
+                    Class<?> registry = Class.forName("cpw.mods.fml.common.registry.LanguageRegistry",
+                            false, Minecraft.class.getClassLoader());
+                    Object instance = registry.getMethod("instance").invoke(null);
+                    registry.getMethod("loadLanguageTable", Map.class, String.class)
+                            .invoke(instance, map, "en_US");
+                } catch (Throwable ignored) {
+                    // Older/other FML without the hook: lang files and StringTranslate still apply.
+                }
+                Field instance = field(net.minecraft.util.StringTranslate.class, "field_74817_a");
+                Object table = readField(instance.get(null), net.minecraft.util.StringTranslate.class,
+                        "field_74816_c");
+                if (table instanceof Map) {
+                    for (Map.Entry<?, ?> e : ((Map<?, ?>) table).entrySet()) {
+                        if (e.getKey() instanceof String && e.getValue() instanceof String
+                                && !map.containsKey(e.getKey())) {
+                            map.put((String) e.getKey(), (String) e.getValue());
+                        }
+                    }
+                }
+                System.out.println("[UMB-LEGACY] client I18n locale keys=" + map.size()
+                        + " fromLangFiles=" + fromFiles);
+            }
+            java.lang.reflect.Method set = net.minecraft.client.resources.I18n.class
+                    .getDeclaredMethod("func_135051_a", net.minecraft.client.resources.Locale.class);
+            set.setAccessible(true);
+            set.invoke(null, locale);
+            if (resources != null) I18N_RESOURCES = resources;
+        } catch (Throwable t) {
+            System.out.println("[UMB-LEGACY] client I18n seed failed (non-fatal): " + t);
         }
     }
 

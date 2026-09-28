@@ -27,7 +27,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 
 /**
- * Era routing for legacy universes (added for the 1.16.5 lane): ONE {@code LegacyBridge} for
  * every call site (all of them already go through {@code UmbBridgeHost.get()}, so none change)
  * that forwards each call to the universe owning the id's namespace.
  *
@@ -214,7 +213,7 @@ public final class BridgeRouter implements LegacyBridge {
     }
 
     /**
-     * Placement gate for an id owned by a non-default era. A pending era must not fall through
+     * Placement gate for an id owned by a non-default era.  A pending era must not fall through
      * to the default bridge: BlockItem would otherwise place the native fallback and consume the
      * held stack before the real era has a chance to create its tile.
      */
@@ -663,6 +662,26 @@ public final class BridgeRouter implements LegacyBridge {
     }
 
     @Override
+    public boolean guiKeyTyped(String guiClass, char typedChar, int keyCode) {
+        try {
+            return defaultBridge.guiKeyTyped(guiClass, typedChar, keyCode);
+        } catch (Throwable t) {
+            AgentLog.error("BridgeRouter.guiKeyTyped(" + guiClass + ")", t, 3);
+            return false;
+        }
+    }
+
+    @Override
+    public boolean guiTextFocused() {
+        try {
+            return defaultBridge.guiTextFocused();
+        } catch (Throwable t) {
+            AgentLog.error("BridgeRouter.guiTextFocused", t, 3);
+            return false;
+        }
+    }
+
+    @Override
     public int placementMetadata(String legacyBlockId, int x, int y, int z, int side,
             float hitX, float hitY, float hitZ, int meta) {
         try {
@@ -845,10 +864,8 @@ public final class BridgeRouter implements LegacyBridge {
         }
     }
 
-    // ---- input lane: id-less player calls go to the default universe ----
     // (Without these overrides the interface defaults silently swallow input AND
     // effects: acceptInput returns false, drainClientEffects returns empty. The input
-    // lane discovered this live — every other call here forwards, these two did not.)
 
     @Override
     public boolean acceptInput(HostPlayer player, InputData input) {

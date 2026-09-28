@@ -51,6 +51,8 @@ final class LegacyGuiMouseDispatcher {
             invokeWithArgs(gui, "func_146280_a", binding.minecraft,
                     Integer.valueOf(854), Integer.valueOf(480));
             activeSession = new ClientGuiSession(context, (GuiContainer) gui, xSize, ySize);
+            activeSession.initLeft = getInt(GuiContainer.class, gui, "field_147003_i", 0);
+            activeSession.initTop = getInt(GuiContainer.class, gui, "field_147009_r", 0);
             if (LegacyInputDiag.oncePer("gui-screen-open:" + gui.getClass().getName(),
                     5_000_000_000L)) {
                 LegacyInputDiag.log("gui legacy screen opened class=" + gui.getClass().getName()
@@ -99,8 +101,18 @@ final class LegacyGuiMouseDispatcher {
     }
 
     static void close(UmbPlayer player) {
+        close(player, null);
+    }
+
+    /**
+     * Ends the client screen of {@code container}'s menu. A reopened GUI gets its new session
+     * before the previous menu's close arrives, so a close only ends the session that belongs to
+     * its own container (null = any, for callers without one).
+     */
+    static void close(UmbPlayer player, Object container) {
         ClientGuiSession session = activeSession;
-        if (session != null && (player == null || session.matchesPlayer(player))) {
+        if (session != null && (player == null || session.matchesPlayer(player))
+                && (container == null || session.container == null || session.container == container)) {
             activeSession = null;
             if (LegacyInputDiag.oncePer("gui-screen-close", 5_000_000_000L)) {
                 LegacyInputDiag.log("gui legacy screen closed");
@@ -171,6 +183,18 @@ final class LegacyGuiMouseDispatcher {
                 int left = screenX - guiX;
                 int top = screenY - guiY;
                 set(GuiScreen.class, gui, "field_146297_k", binding.minecraft);
+                if (left != session.initLeft || top != session.initTop) {
+                    // Lay the screen out at the host panel origin the way a real client does on
+                    // resize: setWorldAndResolution -> initGui with a width/height whose centring
+                    // yields exactly this origin. Text fields keep their init-time (final)
+                    // coordinates, so shifting GuiButtons alone left every legacy text field
+                    // unclickable; a real re-layout places buttons and fields together.
+                    invokeWithArgs(gui, "func_146280_a", binding.minecraft,
+                            Integer.valueOf(2 * left + session.xSize),
+                            Integer.valueOf(2 * top + session.ySize));
+                    session.initLeft = left;
+                    session.initTop = top;
+                }
                 int oldLeft = getInt(GuiContainer.class, gui, "field_147003_i", 0);
                 int oldTop = getInt(GuiContainer.class, gui, "field_147009_r", 0);
                 shiftButtons(gui, left - oldLeft, top - oldTop);
@@ -234,6 +258,125 @@ final class LegacyGuiMouseDispatcher {
         }
     }
 
+    /**
+     * Delivers one keyTyped(char, keyCode) to the live legacy screen - the same instance clicks
+     * and captures use - under the same facade/loopback binding as a click, so a text field's
+     * own packet (for example an "apply" that reads the typed value) reaches its server handler.
+     */
+    static boolean dispatchKey(String guiClass, char typedChar, int keyCode) {
+        UmbGui.GuiContext context = UmbGui.lastContext();
+        if (context == null || context.handler == null || context.player == null) return false;
+        ClientGuiSession session = activeSession;
+        if (session == null || !session.matches(context)) {
+            open(context);
+            session = activeSession;
+        }
+        if (session == null) return false;
+        boolean ownsClientPacketBinding = LegacyNetworkLoopback.bindClientPlayerIfAbsent(
+                context.player instanceof net.minecraft.entity.player.EntityPlayerMP
+                        ? (net.minecraft.entity.player.EntityPlayerMP) context.player : null);
+        try {
+            synchronized (LegacyClientTickDispatcher.class) {
+                Object oldMinecraft = null;
+                Field singleton = null;
+                try {
+                    singleton = net.minecraft.client.Minecraft.class.getDeclaredField("field_71432_P");
+                    singleton.setAccessible(true);
+                    oldMinecraft = singleton.get(null);
+                } catch (Throwable ignored) { }
+                LegacyClientFacade.Binding binding =
+                        LegacyClientFacade.install(context.player, context.world);
+                try {
+                    LegacyClientFacade.bindClientRenderServices(binding.minecraft, binding.gameSettings,
+                            dev.umb.legacy.legacyside.render.LegacyRenderCapture
+                                    .currentResourceManager(binding.minecraft));
+                    set(GuiScreen.class, session.gui, "field_146297_k", binding.minecraft);
+                    invokeKey(session.gui, typedChar, keyCode);
+                    return true;
+                } catch (Throwable t) {
+                    Throwable cause = t;
+                    if (cause instanceof java.lang.reflect.InvocationTargetException
+                            && cause.getCause() != null) {
+                        cause = cause.getCause();
+                    }
+                    if (LegacyInputDiag.oncePer("gui-key:" + session.gui.getClass().getName(),
+                            60_000_000_000L)) {
+                        LegacyInputDiag.log("gui legacy key dispatch failed class="
+                                + session.gui.getClass().getName() + " error=" + cause);
+                    }
+                    return false;
+                } finally {
+                    binding.restoreProxies();
+                    if (singleton != null) {
+                        try { singleton.set(null, oldMinecraft); } catch (Throwable ignored) { }
+                    }
+                }
+            }
+        } finally {
+            if (ownsClientPacketBinding) LegacyNetworkLoopback.clearClientPlayer();
+        }
+    }
+
+    private static final java.util.Map<Class<?>, Field[]> TEXT_FIELDS =
+            new java.util.concurrent.ConcurrentHashMap<Class<?>, Field[]>();
+
+    /** True while the live legacy screen holds a focused GuiTextField (direct field or array). */
+    static boolean textFocused() {
+        ClientGuiSession session = activeSession;
+        if (session == null) return false;
+        Object gui = session.gui;
+        Field[] fields = TEXT_FIELDS.get(gui.getClass());
+        if (fields == null) {
+            java.util.List<Field> found = new java.util.ArrayList<Field>();
+            for (Class<?> type = gui.getClass(); type != null && type != Object.class;
+                    type = type.getSuperclass()) {
+                for (Field f : type.getDeclaredFields()) {
+                    if (Modifier.isStatic(f.getModifiers())) continue;
+                    Class<?> t = f.getType();
+                    if (net.minecraft.client.gui.GuiTextField.class.isAssignableFrom(t)
+                            || (t.isArray() && net.minecraft.client.gui.GuiTextField.class
+                                    .isAssignableFrom(t.getComponentType()))) {
+                        f.setAccessible(true);
+                        found.add(f);
+                    }
+                }
+            }
+            fields = found.toArray(new Field[0]);
+            TEXT_FIELDS.put(gui.getClass(), fields);
+        }
+        for (Field f : fields) {
+            try {
+                Object value = f.get(gui);
+                if (value instanceof net.minecraft.client.gui.GuiTextField) {
+                    if (((net.minecraft.client.gui.GuiTextField) value).func_146206_l()) return true;
+                } else if (value instanceof Object[]) {
+                    for (Object o : (Object[]) value) {
+                        if (o instanceof net.minecraft.client.gui.GuiTextField
+                                && ((net.minecraft.client.gui.GuiTextField) o).func_146206_l()) {
+                            return true;
+                        }
+                    }
+                }
+            } catch (Throwable ignored) { }
+        }
+        return false;
+    }
+
+    private static void invokeKey(Object receiver, char typedChar, int keyCode) throws Exception {
+        for (Class<?> type = receiver.getClass(); type != null && type != Object.class;
+                type = type.getSuperclass()) {
+            try {
+                Method method = type.getDeclaredMethod("func_73869_a", char.class, int.class);
+                method.setAccessible(true);
+                method.invoke(receiver, Character.valueOf(typedChar), Integer.valueOf(keyCode));
+                return;
+            } catch (NoSuchMethodException ignored) {
+                // Search the SRG-named keyTyped up the GuiScreen hierarchy.
+            }
+        }
+        throw new NoSuchMethodException("func_73869_a");
+    }
+
     /** Bounded diagnostic: legacy GuiButton geometry/state vs the click (vanilla hit-test inputs). */
     private static void logButtons(Object gui, int screenX, int screenY) {
         try {
@@ -258,7 +401,12 @@ final class LegacyGuiMouseDispatcher {
     private static final Pattern GATE_FIELD_NAMES = Pattern.compile(
             "(?i).*(ammo|rest|allAmmo|onGround|water|supply|weapon|reload|block|health|aircraft|vehicle|entity).*");
 
-/** Legacy compatibility behavior. */
+    /**
+     * Generic, bounded state probe for disabled legacy GUI actions.  It follows ordinary object
+     * fields by type, not by mod/class name, so a different vehicle or machine GUI can expose the
+     * same grounded/resource gate without adding another adapter.  This is diagnostic only and
+     * never changes the callback or its return value.
+     */
     private static void logGateSnapshot(Object gui, Entity player, Object container) {
         if (!LegacyInputDiag.oncePer("gui-gate-snapshot:" + gui.getClass().getName(),
                 5_000_000_000L)) return;
@@ -447,8 +595,13 @@ final class LegacyGuiMouseDispatcher {
         final int xSize;
         final int ySize;
         volatile dev.umb.bridge.api.GlEmulationSession.Mesh mesh;
+        /** Panel origin the screen was last laid out (initGui) at. */
+        int initLeft, initTop;
+        /** The legacy Container this screen was opened for (the player's open container then). */
+        final Object container;
         ClientGuiSession(UmbGui.GuiContext context, GuiContainer gui, int xSize, int ySize) {
             this.context = context;
+            this.container = context.player == null ? null : context.player.field_71070_bA;
             this.gui = gui;
             this.xSize = xSize;
             this.ySize = ySize;
@@ -456,7 +609,8 @@ final class LegacyGuiMouseDispatcher {
 
         boolean matches(UmbGui.GuiContext other) {
             return other != null && context.handler == other.handler && context.player == other.player
-                    && context.world == other.world && context.id == other.id;
+                    && context.world == other.world && context.id == other.id
+                    && (other.player == null || container == other.player.field_71070_bA);
         }
 
         boolean matchesPlayer(UmbPlayer player) {

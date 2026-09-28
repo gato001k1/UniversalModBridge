@@ -40,6 +40,42 @@ final class LegacyGuiClickChannel {
         return isRequest(id) ? PENDING.remove(id) : null;
     }
 
+    // Key events ride the same button packet under their own prefix; like clicks, the packet
+    // carries only the request key and the (char, keyCode) pair waits here.
+    private static final int KEY_PREFIX = 0x7E000000;
+    private static final ConcurrentHashMap<Integer, KeyRequest> PENDING_KEYS = new ConcurrentHashMap<>();
+
+    static int putKey(char typedChar, int keyCode) {
+        for (int attempt = 0; attempt < MAX_PENDING; attempt++) {
+            int key = KEY_PREFIX | (NEXT.getAndIncrement() & 0x00FFFFFF);
+            if (PENDING_KEYS.size() >= MAX_PENDING) {
+                PENDING_KEYS.remove(PENDING_KEYS.keySet().iterator().next());
+            }
+            if (PENDING_KEYS.putIfAbsent(key, new KeyRequest(typedChar, keyCode)) == null) {
+                return key;
+            }
+        }
+        throw new IllegalStateException("legacy GUI key channel exhausted");
+    }
+
+    static boolean isKeyRequest(int id) {
+        return (id & 0xFF000000) == KEY_PREFIX;
+    }
+
+    static KeyRequest takeKey(int id) {
+        return isKeyRequest(id) ? PENDING_KEYS.remove(id) : null;
+    }
+
+    static final class KeyRequest {
+        final char typedChar;
+        final int keyCode;
+
+        KeyRequest(char typedChar, int keyCode) {
+            this.typedChar = typedChar;
+            this.keyCode = keyCode;
+        }
+    }
+
     static final class Request {
         final int guiX, guiY, button, screenX, screenY;
 

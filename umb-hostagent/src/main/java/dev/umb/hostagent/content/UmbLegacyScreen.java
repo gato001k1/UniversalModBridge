@@ -26,7 +26,6 @@ import net.minecraft.world.inventory.Slot;
  * including its own baked-in 3x3 slot grid -- painted art that has nothing to do with HBM's real
  * 4-slot layout and sits at different coordinates, so the screen showed a false 3x3 grid of empty
  * wells ALONGSIDE the real 18x18 outlines drawn below (visible in
- * research/out/legacy/win-m3/shots/12-crop.png). Fix: split the blit in two --
  * {@code assets/minecraft/textures/gui/container/dispenser.png} (176x256 texture, real/always
  * present, `unzip -l`-verified in research/jars/26.2/client.jar) is blit ONLY for source rows
  * {@code TOP_ART_HEIGHT..PANEL_HEIGHT} (the player-inventory/hotbar grid every vanilla container
@@ -39,11 +38,8 @@ import net.minecraft.world.inventory.Slot;
  * machine-slot wells drawn on top of it. The idiom (draw the dimmed/panorama screen background via
  * {@code super.extractBackground}, then blit with {@code RenderPipelines.GUI_TEXTURED}) and the
  * exact {@code blit} overload are unchanged from before and were originally copied from
- * {@code javap -c} on {@code DispenserScreen.extractBackground} -- see g2-integration-progress.md
  * for the full disassembly this was verified against.</p>
  *
- * <p>{@link #extractLabels} was, until the SCREEN-RENDER lane, deliberately NOT overridden:
- * {@code AbstractContainerScreen}'s own default implementation (javap-verified) already draws
  * {@code title} at {@code (titleLabelX, titleLabelY)} and {@code playerInventoryTitle} at
  * {@code (inventoryLabelX, inventoryLabelY)} -- the exact same two calls the previous version of
  * this class duplicated by hand -- and those four fields already default to sane positions for a
@@ -60,7 +56,6 @@ import net.minecraft.world.inventory.Slot;
  * {@code ContainerHandle.syncData().length}, which is a FIXED 32-slot register bank (see
  * {@code UmbPlayer.syncData = new int[32]} in umb-legacy) -- not "32 meaningful progress values"
  * -- so that loop painted 32 stacked bars top-to-bottom, i.e. exactly the horizontal-stripe defect
- * from research/out/legacy/win-m2/shots/09-GUI.png. Removed rather than bounded: M1's Definition
  * of Done does not require progress bars (see the class javadoc above), and a correct version
  * needs the real per-index "is this one meaningful" descriptor the placeholder API does not carry.</p>
  */
@@ -70,7 +65,6 @@ public final class UmbLegacyScreen extends AbstractContainerScreen<UmbLegacyMenu
     private static final int TEXTURE_SIZE = 256;
     private static final int SLOT_COLOR = 0xFF8B8B8B;
     /** Vanilla's own flat panel-background tone (matches dispenser.png's own border/background
-     *  pixels, javap/asset-verified by eye against every vanilla 176x166 container texture), used
      *  to fill the machine-slot area so it does not clash with the blit below it. */
     private static final int PANEL_BG_COLOR = 0xFFC6C6C6;
     /** Everything at or below this source/dest row is the UNIVERSAL player-inventory + hotbar
@@ -108,7 +102,6 @@ public final class UmbLegacyScreen extends AbstractContainerScreen<UmbLegacyMenu
         try {
             Minecraft mc = Minecraft.getInstance();
             if (mc != null && mc.gameMode != null) {
-                // javap-verified 26.2 route: MultiPlayerGameMode.handleInventoryButtonClick(int,int)
                 // creates ServerboundContainerButtonClickPacket(containerId, buttonId).
                 mc.gameMode.handleInventoryButtonClick(getMenu().containerId, id);
             }
@@ -143,6 +136,67 @@ public final class UmbLegacyScreen extends AbstractContainerScreen<UmbLegacyMenu
             LegacyGuiClickChannel.take(request);
             return false;
         }
+    }
+
+    /** Sends one legacy keyTyped(char, keyCode) through the same container-button packet as clicks. */
+    private boolean queueLegacyKey(char typedChar, int keyCode) {
+        int request = LegacyGuiClickChannel.putKey(typedChar, keyCode);
+        try {
+            Minecraft mc = Minecraft.getInstance();
+            if (mc == null || mc.gameMode == null) {
+                LegacyGuiClickChannel.takeKey(request);
+                return false;
+            }
+            mc.gameMode.handleInventoryButtonClick(getMenu().containerId, request);
+            return true;
+        } catch (Throwable t) {
+            AgentLog.error("UmbLegacyScreen.queueLegacyKey", t, 2);
+            LegacyGuiClickChannel.takeKey(request);
+            return false;
+        }
+    }
+
+    public static boolean legacyTextFocused() {
+        try {
+            dev.umb.bridge.api.LegacyBridge bridge = UmbBridgeHost.get();
+            return bridge != null && bridge.guiTextFocused();
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /**
+     * Keyboard for live legacy GUIs. While one of the legacy screen's own text fields has focus,
+     * keys belong to it (as on a 1.7.10 client, where the field consumes them before
+     * GuiContainer's inventory-key close and hotbar-swap handling): editing keys and Ctrl
+     * shortcuts are forwarded here, printable input through {@link #charTyped}. Escape always
+     * closes. Without a focused field the host screen handles keys as before, so number keys and
+     * the inventory key are never applied twice.
+     */
+    @Override
+    public boolean keyPressed(net.minecraft.client.input.KeyEvent event) {
+        int key = event.key();
+        if (key == 256 || legacyGuiMesh() == null || !legacyTextFocused()) {
+            return super.keyPressed(event);
+        }
+        char ctrl = (event.modifiers() & 0x2) != 0 ? LegacyKeyCodes.ctrlChar(key) : '\0';
+        if (ctrl != '\0') {
+            queueLegacyKey(ctrl, LegacyKeyCodes.lwjgl(key));
+        } else if (LegacyKeyCodes.isEditingKey(key)) {
+            queueLegacyKey(LegacyKeyCodes.editingChar(key), LegacyKeyCodes.lwjgl(key));
+        }
+        return true;
+    }
+
+    @Override
+    public boolean charTyped(net.minecraft.client.input.CharacterEvent event) {
+        int cp = event.codepoint();
+        if (cp <= 0 || cp > 0xFFFF || legacyGuiMesh() == null || !legacyTextFocused()) {
+            return super.charTyped(event);
+        }
+        char c = (char) cp;
+        queueLegacyKey(c, LegacyKeyCodes.lwjglForChar(c));
+        return true;
     }
 
     /** True when the panel point belongs to a native slot or a statically proven native widget. */
@@ -188,11 +242,9 @@ public final class UmbLegacyScreen extends AbstractContainerScreen<UmbLegacyMenu
                 // fallback below, this texture IS the real thing).
                 g.blit(pipeline, menu.textureLocation, leftPos, topPos, 0.0F, 0.0F,
                         imageWidth, imageHeight, menu.sheetWidth, menu.sheetHeight);
-                // SCREEN-RENDER lane (GENERALIZATION-PLAN.md GAP 2): everything ELSE the mod's own
                 // drawGuiContainerBackgroundLayer draws -- progress-bar frames, gauge borders,
                 // tank/heat indicator icons -- that GuiProfile could statically prove is safe to
                 // blit (see GuiProfile.buildRects for the exact skip policy and
-                // research/out/legacy/guimap-notes/SCREEN-RENDER.md for the numbers). The rect
                 // list never includes the full-panel background blit just drawn above (skipped by
                 // GuiProfile at parse time, matched by shape not list position), so this can never
                 // double-draw it.
@@ -229,7 +281,6 @@ public final class UmbLegacyScreen extends AbstractContainerScreen<UmbLegacyMenu
      * identity (a reasonable proxy for "per GUI class" -- this menu carries no class name) rather
      * than per frame, so a rect that throws does not flood the log or tank the framerate.
      *
-     * <p><b>TILE-FIELD-SNAPSHOT lane:</b> {@code menu.currentTileFieldLookup()} is called ONCE per
      * frame here (never per rect) — a single {@code TileSnapshotChannel} map read whose underlying
      * value is only ever refreshed at server-TICK rate by {@code UmbLegacyMenu#broadcastChanges} —
      * and reused for every rect this frame needs it, satisfying the brief's "snapshot on the tick,
@@ -247,11 +298,9 @@ public final class UmbLegacyScreen extends AbstractContainerScreen<UmbLegacyMenu
                 if (r.textureIndex < 0 || r.textureIndex >= menu.rectTextures.length) continue;
                 Identifier tex = menu.rectTextures[r.textureIndex];
                 if (tex == null) continue;
-                // SYNC-BINDING lane: a rect guarded by ONE bound-field condition (GuiProfile.SyncGuard)
                 // draws only when the ORIGINAL bytecode's own skip test is false this frame - a live
                 // per-frame check against the current register value, never a one-time decision.
                 if (r.guard != null && r.guard.shouldSkip(menu::getData)) continue;
-                // TILE-FIELD-SNAPSHOT lane: same idea, but the skip test is evaluated against the
                 // live tile-field snapshot / mouse position / panel origin instead of a sync
                 // register - see GuiProfile.TileGuard#shouldSkip for why an UNDECIDABLE guard
                 // (an absent field this frame) counts as "skip", never as "safe to draw".
@@ -259,7 +308,6 @@ public final class UmbLegacyScreen extends AbstractContainerScreen<UmbLegacyMenu
                     continue;
                 }
                 // Up to four of u/v/w/h can instead be a GuiProfile.SyncExpr (bound to a live
-                // ContainerHandle.syncData() register) or, new in this lane, a GuiProfile.TileExpr
                 // (bound to a live per-tile-entity snapshot field) - evaluated fresh every frame,
                 // the SAME formula umb-guimap extracted, never a frozen/guessed value. A null from
                 // a TileExpr means the field is absent THIS frame (tile removed, snapshot not yet
@@ -297,7 +345,6 @@ public final class UmbLegacyScreen extends AbstractContainerScreen<UmbLegacyMenu
     }
 
     /** One arg slot's live value, trying the sync-register binding first (pre-existing), then the
-     *  per-tile-snapshot binding (this lane), falling back to the static value - never more than
      *  one of {@code sync}/{@code tile} is non-null for the same slot (see GuiProfile.buildRects).
      *  Returns null (never a substituted default) only when a TileExpr's required field is absent
      *  from this frame's snapshot. */
@@ -311,7 +358,6 @@ public final class UmbLegacyScreen extends AbstractContainerScreen<UmbLegacyMenu
     /**
      * M1-POST-FIX kept {@link #extractLabels} unoverridden because the default title/
      * playerInventoryTitle drawing was already correct and every draw call this class added was a
-     * background-layer one. SCREEN-RENDER lane adds real, foreground-layer content of its own
      * (custom gauge labels, item names, mode text -- {@link UmbLegacyMenu#labels}) that the default
      * implementation knows nothing about, so this now calls {@code super.extractLabels} FIRST
      * (preserving title/playerInventoryTitle byte-for-byte) and then draws the mod's own labels on

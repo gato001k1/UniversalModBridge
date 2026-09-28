@@ -79,7 +79,6 @@ import java.util.Map;
  * {@link LegacyLoader} -- see its javadoc), and ONLY log4j -- the one package with a real,
  * verified collision risk (26.2 ships its own, newer log4j on tier 1) -- gets its own isolated
  * tier. This is a deliberate, flagged deviation from the README's literal tier-2 jar list; see
- * {@code research/out/legacy/g2-integration-progress.md} for the full writeup.</p>
  *
  * <h2>Thread and JVM-flag requirements</h2>
  * <p>{@code boot()} always runs its actual work on a freshly spawned thread named exactly
@@ -185,7 +184,6 @@ public final class UmbUniverse implements LegacyBridge {
         // agent-wide `ns=`; (3) the snapshot/rendermap/pack pipeline upstream of this class is
         // still one-file-per-mod-run (harness/legacy.ps1), so a real multi-mod boot today would
         // need those artifacts merged or loaded as a list before this class ever sees them - that
-        // is a harness-level concern, out of this lane's ownership, not a umb-hostagent one.
         List<File> modJars = new ArrayList<>();
         List<Path> configured = HostAgent.modJars();
         if (configured == null || configured.isEmpty()) {
@@ -384,7 +382,6 @@ public final class UmbUniverse implements LegacyBridge {
     // ---- INPUT-BRIDGE: forwarding (same null-safe shape as above) ----
     // (Without these, the interface defaults silently swallow input AND effects on
     // the final hop: acceptInput returns false, drainClientEffects returns empty.
-    // Found live while debugging the input lane — every sibling forwards.)
 
     @Override
     public boolean acceptInput(HostPlayer player, dev.umb.bridge.api.InputData input) {
@@ -651,7 +648,6 @@ public final class UmbUniverse implements LegacyBridge {
         }
     }
 
-    // ---- 2026-09-24: forwarders for every LegacyBridge method this wrapper used to inherit as a
     // no-op default (BridgeDelegatesOverrideAllTest). Each call was silently dropped before: block
     // ticks, contact effects, drops, held-item ticks, item use, tick events, GUI buttons, respawn. ----
 
@@ -1075,6 +1071,29 @@ public final class UmbUniverse implements LegacyBridge {
             return r.guiMouseClick(guiClass, x, y, z, guiX, guiY, button, screenX, screenY);
         } catch (Throwable t) {
             AgentLog.error("UmbUniverse.guiMouseClick", t, 3);
+            return false;
+        }
+    }
+
+    @Override
+    public boolean guiKeyTyped(String guiClass, char typedChar, int keyCode) {
+        LegacyBridge r = real;
+        if (r == null) return false;
+        try {
+            return r.guiKeyTyped(guiClass, typedChar, keyCode);
+        } catch (Throwable t) {
+            AgentLog.error("UmbUniverse.guiKeyTyped", t, 3);
+            return false;
+        }
+    }
+
+    @Override
+    public boolean guiTextFocused() {
+        LegacyBridge r = real;
+        if (r == null) return false;
+        try {
+            return r.guiTextFocused();
+        } catch (Throwable t) {
             return false;
         }
     }
