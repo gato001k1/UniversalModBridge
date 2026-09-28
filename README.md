@@ -1,6 +1,7 @@
 # UniversalModBridge
 
 This is a WIP mod that enables the use of older mods in newer versions of minecraft.
+Notice i did use AI on this project and the use of ai is permitted as long as it is controlled.
 
 It loads unmodified 1.7.10, 1.12.2 and 1.16.5 Forge mods into Minecraft 26.2. It's not a port
 of one mod, it's a loader: the old Forge runs headless inside the same game, the mods run on it
