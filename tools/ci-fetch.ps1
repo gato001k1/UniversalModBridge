@@ -327,6 +327,8 @@ if (-not (Test-Path -LiteralPath $lw1122)) {
 } else {
   Write-Host "Preserved cached LaunchWrapper copy: $lw1122"
 }
+# The 1.12.2 transformers compile against ASM 5.2, the version Forge 1.12.2 ships.
+Download-Maven 'https://repo1.maven.org/maven2' 'org.ow2.asm' 'asm-debug-all' '5.2' 'asm-debug-all-5.2.jar' (Join-Path $Root 'research/out/legacy-1122/libs/asm-debug-all-5.2.jar')
 $cp1165 = Join-Path $Root 'umb-legacy-1165/resources/classpath-1165.txt'
 if (-not (Test-Path -LiteralPath $cp1165)) { throw "Tracked curated classpath is missing: $cp1165" }
 Write-Host "Preserved curated 1.16.5 classpath: $cp1165"
