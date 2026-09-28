@@ -61,10 +61,10 @@ function Get-MojangVersion([string]$Version) {
 }
 
 function Get-PlatformKey {
-  $isWindows = ($env:OS -eq 'Windows_NT') -or ($PSVersionTable.PSEdition -eq 'Desktop')
+  $onWindows = ($env:OS -eq 'Windows_NT') -or ($PSVersionTable.PSEdition -eq 'Desktop')
   $isMacOS = (Get-Variable IsMacOS -ValueOnly -ErrorAction SilentlyContinue) -eq $true
   $isLinux = (Get-Variable IsLinux -ValueOnly -ErrorAction SilentlyContinue) -eq $true
-  $os = if ($isWindows) { 'windows' } elseif ($isMacOS) { 'osx' } elseif ($isLinux) { 'linux' } else { throw 'Unsupported runner OS' }
+  $os = if ($onWindows) { 'windows' } elseif ($isMacOS) { 'osx' } elseif ($isLinux) { 'linux' } else { throw 'Unsupported runner OS' }
   $arch = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant()
   $arm = $arch -in @('arm64', 'arm')
   [pscustomobject]@{ Os = $os; Arm = $arm; Arch = $arch }
