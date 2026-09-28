@@ -52,18 +52,8 @@ public interface TileHandle {
     }
 
     /**
-     * Door-live lane: invokes one static {@code (String, Object) -> double[]} evaluator -
-     * typically an animation-track function - against the object at the end of
-     * {@code objectPath} (resolved exactly like {@link #snapshotFields} hops, TE-rooted),
-     * with {@code stringArg} naming the track. Called on the SERVER thread; the method is
-     * looked up by name with a {@code (String, <anim runtime type>)} signature and must
-     * return {@code double[]} (anything else, any throw, or a missing method comes back
-     * null - never a fabricated array). A hop chain resolving to null still reaches the
-     * method as a null argument - the mod's own evaluator decides what null means. Exists so per-frame
-     * animation values computed by the mod's own pure evaluator (same inputs the legacy
-     * renderer would pass it, including its own clock reads) can be synced without
-     * reimplementing that evaluator natively. Defaults to null (no evaluator).
-     */
+ * invokes one static {@code (String, Object) -> double[]} evaluator - typically an animation-track function - against the object at the end of {@code objectPath} (resolved exactly like {@link #snapshotFields} hops, TE-rooted), with {@code stringArg} naming...
+ */
     default double[] evalStatic(String owner, String name, String stringArg, FieldPath objectPath) {
         return null;
     }
@@ -83,17 +73,9 @@ public interface TileHandle {
     }
 
     /**
-     * Turret follow-up: would vanilla's tile-entity renderer dispatch draw this tile as
-     * {@code teClass}? Vanilla ({@code TileEntityRendererDispatcher}, bytecode-verified)
-     * looks the tile's class up in the bound-TESR map and otherwise walks to superclasses
-     * (stopping before {@code TileEntity} itself) - a multiblock filler holding a proxy or
-     * dummy tile is therefore never drawn, while the core with the bound class is. Without
-     * this, every live handle counts as a render core and filler dummies double-render the
-     * whole model (live 2026-09-24: a proxy cell beside the chekhov core drew a second
-     * interleaved turret). Called on the SERVER thread; any failure reads as no constraint
-     * (render, today's behaviour). Defaults to true (no constraint) for handles that do
-     * not wrap a classed object (fakes, tests).
-     */
+ * Turret follow-up: would vanilla's tile-entity renderer dispatch draw this tile as {@code teClass}?
+ * Vanilla looks the tile's class up in the bound-TESR map and otherwise walks to superclasses (stopping before {@code TileEntity} itself) - a multiblock filler...
+ */
     default boolean rendersAs(String teClass) {
         return true;
     }

@@ -38,7 +38,7 @@ public interface LegacyBridge {
     void    tickTile(TileHandle t);
     void    shutdown();
 
-    // ---- PART 1 (INTERACTION-BRIDGE.md / GENERALIZATION-PLAN.md GAP 3): placement / removal /
+// Legacy compatibility behavior.
     // neighbor-change, so a mod's OWN placement code can build a multiblock out of its own filler
     // blocks through the world facade that already works, and breaking it can undo that generically.
     // Every method here is void-or-primitive-returning and must never throw across the boundary.
@@ -119,7 +119,7 @@ public interface LegacyBridge {
      */
     EntityHandle restoreEntity(byte[] nbt);
 
-    // ---- TICK/CONTACT lane: block ticks + entity-inside, the two block callbacks that make
+    // TICK/: block ticks + entity-inside, the two block callbacks that make
     // fluids flow, fire spread, gases rise, and conveyors/gas/spikes act on the player. Both have
     // no-op defaults ONLY so eras/fakes that have not bridged them yet (umb-legacy-1122, test
     // fakes) keep compiling - the real 1.7.10 LegacyBridgeImpl overrides both.
@@ -146,17 +146,8 @@ public interface LegacyBridge {
     // ---- BLOCK SURFACE: placement, drops, contact, client display and comparator ------------
 
     /**
-     * Door-live lane: the legacy block's live collision bounds
-     * ({@code Block.getCollisionBoundingBoxFromPool}, 1.7.10) for one cell, for blocks
-     * whose bounds genuinely depend on tile-entity state (doors, hatches - never guessed:
-     * the host only calls this for block ids the extract-time sidecar flags as
-     * state-following, and only on the server thread where the universe is live).
-     * Returns {@code {minX, minY, minZ, maxX, maxY, maxZ}} in 1.7.10 block-local
-     * coordinates, or null when the block has no live bounds right now (no tile, null
-     * box, any failure) - the caller then keeps its statically extracted shape. The
-     * values feed 26.2 collision directly, so they must be the box corners, never voxel
-     * indices or metadata. Must never throw across the boundary.
-     */
+ * the legacy block's live collision bounds ({@code Block.getCollisionBoundingBoxFromPool}, 1.7.10) for one cell, for blocks whose bounds genuinely depend on tile-entity state (doors, hatches - never guessed: the host only calls this for block ids the...
+ */
     default double[] collisionBounds(String legacyBlockId, int x, int y, int z) {
         return null;
     }
@@ -289,13 +280,9 @@ public interface LegacyBridge {
     }
 
     /**
-     * Last third-person camera distance (in blocks) written by legacy client code into its own
-     * EntityRenderer (1.7.10 {@code field_78490_B}/{@code thirdPersonDistance}, javap-verified on
-     * the 1.7.10 SRG runtime; legacy mods write it through the client facade's EntityRenderer).
-     * Captured after the bounded legacy client tick, per player name, like {@link #cameraState}.
-     * Returns NaN when no legacy client tick has recorded one (honest absence, never a guess) -
-     * the host then keeps its own distance. Must never throw across the boundary.
-     */
+ * Last third-person camera distance (in blocks) written by legacy client code into its own EntityRenderer .
+ * Captured after the bounded legacy client tick, per player name, like {@link #cameraState}.
+ */
     default float thirdPersonDistance(String playerName) {
         return Float.NaN;
     }

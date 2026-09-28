@@ -36,7 +36,7 @@ public interface HostWorld {
         return false;
     }
 
-    // ---- PRESENTATION lane: default no-ops so every existing implementer (probes, test fakes)
+    // default no-ops so every existing implementer
     // stays source-compatible; the real host overrides them. The host maps legacy names to modern
     // equivalents; unknown particles use a counted native smoke fallback, while unknown sounds
     // are skipped-and-counted because a guessed sound identity is not honest.
@@ -76,7 +76,7 @@ public interface HostWorld {
         return Collections.emptyList();
     }
 
-    // ---- drops-waterlogged lane: default no-ops so every existing implementer (era hosts,
+    // default no-ops so every existing implementer (era hosts
     // probes, test fakes) stays source-compatible; the real host overrides them.
 
     /**
