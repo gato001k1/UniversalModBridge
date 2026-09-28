@@ -640,7 +640,6 @@ public final class GuiProfile {
                     ? buildRects(arr(go, "backgroundDrawRects"), textures, xSize, ySize, syncFieldToIndex, p)
                     : buildRects(arr(go, "backgroundDrawRects"), textures, xSize, ySize, syncFieldToIndex, p,
                         noTextureSink, rawBackgroundTextures, guiClass, containerClass);
-            appendKnownRtgPowerFallback(rects, guiClass, containerClass, p);
             List<Label> labels = buildLabels(arr(go, "foregroundLabels"), p);
             List<Button> buttons = buildButtons(arr(go, "buttons"));
             List<TileFieldRef> tileFieldRefs = collectTileFieldRefs(rects);
@@ -683,46 +682,6 @@ public final class GuiProfile {
                     packetResolved, packetClass, packetArgs));
         }
         return out;
-    }
-
-    /**
-     * Grounded HBM compatibility fallback for the one known extracted dynamic rect that the
-     * profile cannot currently represent: GUIMachineRTG's right-hand power gauge.  The bytecode
-     * evidence is the same profile row that resolves the heat gauge immediately to its left:
-     * x=guiLeft+146, texture u=192, width=16, and power/maxPower drives a 51px fill from the
-     * bottom (screen y=guiTop+61-ratio, texture v=61-ratio, height=ratio).  The extractor leaves
-     * v/h as opaque locals, so buildRects correctly refuses to guess; this narrow, class-paired
-     * fallback supplies only that independently grounded HBM shape and still binds every value to
-     * the live tile snapshot.  It is deliberately not a general unresolved-rect heuristic.
-     */
-    private static void appendKnownRtgPowerFallback(List<Rect> rects, String guiClass,
-                                                     String containerClass, GuiProfile counters) {
-        if (!"com.hbm.inventory.gui.GUIMachineRTG".equals(guiClass)
-                || !"com.hbm.inventory.container.ContainerMachineRTG".equals(containerClass)) return;
-        for (Rect r : rects) {
-            if (r.dx == 146 && r.u == 192 && r.w == 16
-                    && r.vTileExpr != null && r.hTileExpr != null) return;
-        }
-
-        TileFieldRef power = new TileFieldRef(new String[]{"power"}, new String[]{"field"});
-        TileFieldRef powerMax = new TileFieldRef(new String[]{"powerMax"}, new String[]{"field"});
-        TileFieldRef hasPower = new TileFieldRef(new String[]{"hasPower"}, new String[]{"accessor"});
-        TileExpr destinationY = new TileExpr(power, 51.0, true, powerMax, 0.0,
-                0, -1, "guiTop", 61, null, 0.0, null, false);
-        TileExpr textureV = new TileExpr(power, 51.0, true, powerMax, 0.0,
-                61, -1, null, 0, null, 0.0, null, false);
-        TileExpr height = new TileExpr(power, 51.0, true, powerMax, 0.0,
-                0, 1, null, 0, null, 0.0, null, false);
-        TileGuard guard = new TileGuard(new TileGuard.Node("COMPARE", "EQ",
-                new TileGuard.Operand("tileField", 0.0, null, 0, hasPower),
-                new TileGuard.Operand("const", 0.0, null, 0, null), null));
-        rects.add(new Rect(146, 0, 192, 0, 16, 0,
-                null, null, null, null, null,
-                null, destinationY,
-                null, textureV, null, height, guard, 0));
-        counters.rectsDrawable++;
-        counters.rectsTileBoundDrawable++;
-        counters.rectsTileGuardEvaluatedDrawable++;
     }
 
     /** One entry per element of the JSON {@code backgroundTextures} array, preserving index —

@@ -347,32 +347,4 @@ class GuiProfileRectsTest {
                 + " labelsTotal=" + p.labelsTotal + " labelsUnresolvedSkipped=" + p.labelsUnresolvedSkipped
                 + " labelsDrawable=" + p.labelsDrawable);
     }
-
-    @Test
-    void realRtgPowerGaugeUsesTheGroundedTileSnapshotFallback() throws Exception {
-        Path real = Paths.get("research/out/legacy/gui-profile.json");
-        org.junit.jupiter.api.Assumptions.assumeTrue(Files.isRegularFile(real),
-                "research/out/legacy/gui-profile.json not present in this checkout");
-        GuiProfile p = GuiProfile.load(real);
-        GuiProfile.GuiEntry rtg = p.lookup("com.hbm.inventory.container.ContainerMachineRTG");
-        assertTrue(rtg != null, "ContainerMachineRTG must be resolvable in the real corpus");
-
-        GuiProfile.Rect power = rtg.rects.stream()
-                .filter(r -> r.dx == 146 && r.u == 192 && r.w == 16
-                        && r.vTileExpr != null && r.hTileExpr != null)
-                .findFirst()
-                .orElseThrow(() -> new AssertionError("RTG power rect fallback is missing"));
-        assertTrue(power.yTileExpr != null, "RTG power destination Y must be live");
-        assertTrue(power.tileGuard != null, "RTG power rect must retain the hasPower guard");
-        assertTrue(rtg.tileFieldRefs.stream().anyMatch(r -> "power".equals(r.key)));
-        assertTrue(rtg.tileFieldRefs.stream().anyMatch(r -> "powerMax".equals(r.key)));
-        assertTrue(rtg.tileFieldRefs.stream().anyMatch(r -> "hasPower()".equals(r.key)));
-
-        Map<String, Double> snapshot = Map.of("power", 50_000.0, "powerMax", 100_000.0,
-                "hasPower()", 1.0);
-        assertEquals(135, power.yTileExpr.evaluate(snapshot::get, 10, 100));
-        assertEquals(35, power.vTileExpr.evaluate(snapshot::get, 10, 100));
-        assertEquals(25, power.hTileExpr.evaluate(snapshot::get, 10, 100));
-        assertTrue(!power.tileGuard.shouldSkip(snapshot::get, 0, 0, 10, 100));
-    }
 }
