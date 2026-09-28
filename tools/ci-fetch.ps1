@@ -62,9 +62,9 @@ function Get-MojangVersion([string]$Version) {
 
 function Get-PlatformKey {
   $onWindows = ($env:OS -eq 'Windows_NT') -or ($PSVersionTable.PSEdition -eq 'Desktop')
-  $isMacOS = (Get-Variable IsMacOS -ValueOnly -ErrorAction SilentlyContinue) -eq $true
-  $isLinux = (Get-Variable IsLinux -ValueOnly -ErrorAction SilentlyContinue) -eq $true
-  $os = if ($onWindows) { 'windows' } elseif ($isMacOS) { 'osx' } elseif ($isLinux) { 'linux' } else { throw 'Unsupported runner OS' }
+  $onMacOS = (Get-Variable IsMacOS -ValueOnly -ErrorAction SilentlyContinue) -eq $true
+  $onLinux = (Get-Variable IsLinux -ValueOnly -ErrorAction SilentlyContinue) -eq $true
+  $os = if ($onWindows) { 'windows' } elseif ($onMacOS) { 'osx' } elseif ($onLinux) { 'linux' } else { throw 'Unsupported runner OS' }
   $arch = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant()
   $arm = $arch -in @('arm64', 'arm')
   [pscustomobject]@{ Os = $os; Arm = $arm; Arch = $arch }
@@ -74,9 +74,9 @@ function Library-Allowed($Rules, [string]$Os) {
   if (-not $Rules) { return $true }
   $allowed = $false
   foreach ($rule in @($Rules)) {
-    $matches = $true
-    if ($rule.os -and $rule.os.name -and $rule.os.name -ne $Os) { $matches = $false }
-    if ($matches) { $allowed = ($rule.action -eq 'allow') }
+    $ruleMatches = $true
+    if ($rule.os -and $rule.os.name -and $rule.os.name -ne $Os) { $ruleMatches = $false }
+    if ($ruleMatches) { $allowed = ($rule.action -eq 'allow') }
   }
   return $allowed
 }
