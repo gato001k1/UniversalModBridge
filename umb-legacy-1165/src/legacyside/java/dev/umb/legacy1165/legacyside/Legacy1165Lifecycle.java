@@ -270,6 +270,7 @@ public final class Legacy1165Lifecycle {
         // installed when CLIENT is on; never overwrites a real Minecraft (checked
         // inside installHeadlessMinecraftPlaceholder).
         if (dist == Dist.CLIENT) {
+            isolateEraNativeExtraction(loader, gameDir, log);
             installHeadlessMinecraftPlaceholder(log);
         }
 
@@ -719,6 +720,46 @@ public final class Legacy1165Lifecycle {
      * from real constructors and real mod-jar resources - never a speculative
      * facade built ahead of evidence.</p>
      */
+    /**
+     * Client code in this universe decodes textures through its OWN LWJGL copy (the manifest
+     * carries lwjgl 3.2.2 + natives, loaded child-first), e.g. NativeImage/STB for the headless
+     * atlas. A live host JVM already runs its own LWJGL and passes
+     * -Dorg.lwjgl.system.SharedLibraryExtractPath: both copies would extract lwjgl.dll to the
+     * same file, which the host has loaded and locked ("already loaded in another classloader"
+     * or a failed overwrite), so every era native call fails live while it works headless.
+     * LWJGL's Configuration snapshots that property into a per-class state at class init and
+     * {@code set} overrides only THIS loader's copy, so the era gets a private, versioned
+     * extract directory and the host's LWJGL is never touched. Reflective: this class must not
+     * link LWJGL itself. Best effort: a failure is logged and leaves the default.
+     */
+    static void isolateEraNativeExtraction(ClassLoader loader, File gameDir, Consumer<String> log) {
+        try {
+            Class<?> configuration = Class.forName("org.lwjgl.system.Configuration", true, loader);
+            if (configuration.getClassLoader() != loader) {
+                log.accept("[lifecycle] era LWJGL not owned by the era loader ("
+                        + configuration.getClassLoader() + "); native extract path left as is");
+                return;
+            }
+            String version = "unknown";
+            try {
+                Class<?> v = Class.forName("org.lwjgl.Version", true, loader);
+                version = String.valueOf(v.getMethod("getVersion").invoke(null));
+            } catch (Throwable ignored) {
+                // Versioned dir is a nicety; the per-universe dir alone already avoids the clash.
+            }
+            File dir = new File(gameDir, "natives/lwjgl-" + version.replaceAll("[^A-Za-z0-9._-]", "_"));
+            if (!dir.isDirectory() && !dir.mkdirs()) {
+                log.accept("[lifecycle] cannot create era native dir " + dir + "; left as is");
+                return;
+            }
+            Object extractPath = configuration.getField("SHARED_LIBRARY_EXTRACT_PATH").get(null);
+            extractPath.getClass().getMethod("set", Object.class).invoke(extractPath, dir.getAbsolutePath());
+            log.accept("[lifecycle] era LWJGL " + version + " natives extract to " + dir.getAbsolutePath());
+        } catch (Throwable t) {
+            log.accept("[lifecycle] era native extract isolation skipped: " + t);
+        }
+    }
+
     private static void installHeadlessMinecraftPlaceholder(Consumer<String> log) {
         try {
             Field instance = net.minecraft.client.Minecraft.class.getDeclaredField("field_71432_P");
@@ -742,6 +783,11 @@ public final class Legacy1165Lifecycle {
                     .invoke(unsafeField.get(null), net.minecraft.client.GameSettings.class);
             setInstanceField(settings, "field_74324_K", new net.minecraft.client.settings.KeyBinding[0]);
             setInstanceField(placeholder, "field_71474_y", settings);
+            // Render-time model code reads Minecraft.getRenderPartialTicks() (func_184121_ak ->
+            // field_71428_T.field_194147_b; live: an animated mob model's setRotationAngles).
+            // The REAL Timer, built exactly as Minecraft's constructor does (Timer(20.0F, 0L));
+            // captures write the current partial tick into it (LegacyEntityRenderCapture1165Client).
+            setInstanceField(placeholder, "field_71428_T", new net.minecraft.util.Timer(20.0F, 0L));
             // Client colour registration (IE's ClientProxy.init registers its item/block
             // colours into these): REAL vanilla registries, built by their own public
             // no-arg constructors exactly as a client constructs them - nothing stubbed.
@@ -900,6 +946,10 @@ public final class Legacy1165Lifecycle {
                             net.minecraft.resources.IReloadableResourceManager.class);
             vanillaRegister.setAccessible(true);
             vanillaRegister.invoke(mgr, items, resources);
+            // The same real ItemRenderer serves the placeholder's getItemRenderer(): render
+            // layers that draw held items reach it through FirstPersonRenderer (built once the
+            // placeholder's dispatcher is final, see setPlaceholderDispatcher).
+            placeholderItemRenderer = items;
             int vanilla = mgr.field_78729_o == null ? 0 : mgr.field_78729_o.size();
             log.accept("[entity-render] vanilla entity renderers registered=" + vanilla);
         } catch (Throwable t) {
@@ -968,8 +1018,41 @@ public final class Legacy1165Lifecycle {
             }
             setInstanceField(minecraft, "field_175616_W", mgr);
             log.accept("[entity-render] placeholder dispatcher rebound to populated manager");
+            bindPlaceholderItemRendering((net.minecraft.client.Minecraft) minecraft, log);
         } catch (Throwable t) {
             log.accept("[entity-render] placeholder dispatcher rebind skipped: " + t);
+        }
+    }
+
+    /** Real ItemRenderer built alongside the vanilla entity renderers (null until then). */
+    private static volatile net.minecraft.client.renderer.ItemRenderer placeholderItemRenderer;
+
+    /**
+     * Gives the placeholder a real {@code ItemRenderer} (field_175621_X) and
+     * {@code FirstPersonRenderer} (field_175620_Y). Mob render layers draw held items through
+     * {@code Minecraft.getFirstPersonRenderer().renderItemSide(...)} unconditionally (live: a
+     * held-item layer NPE'd on the null renderer and blanked the whole mob); vanilla's
+     * only stores mc, mc.getRenderManager() and mc.getItemRenderer(), so it is built after the
+     * dispatcher rebind above. Never overwrites a value that is already present.
+     */
+    private static void bindPlaceholderItemRendering(net.minecraft.client.Minecraft minecraft,
+            Consumer<String> log) {
+        try {
+            Field items = net.minecraft.client.Minecraft.class.getDeclaredField("field_175621_X");
+            items.setAccessible(true);
+            if (items.get(minecraft) == null && placeholderItemRenderer != null) {
+                setInstanceField(minecraft, "field_175621_X", placeholderItemRenderer);
+            }
+            Field hand = net.minecraft.client.Minecraft.class.getDeclaredField("field_175620_Y");
+            hand.setAccessible(true);
+            if (hand.get(minecraft) == null && items.get(minecraft) != null) {
+                setInstanceField(minecraft, "field_175620_Y",
+                        new net.minecraft.client.renderer.FirstPersonRenderer(minecraft));
+            }
+            log.accept("[entity-render] placeholder item rendering bound itemRenderer="
+                    + (items.get(minecraft) != null) + " firstPersonRenderer=" + (hand.get(minecraft) != null));
+        } catch (Throwable t) {
+            log.accept("[entity-render] placeholder item rendering skipped: " + t);
         }
     }
 

@@ -178,9 +178,42 @@ public final class Hooks {
         CreativePaging.nextPage(null);
     }
 
+    /**
+     * This frame's cancelled {@code RenderGameOverlayEvent.Pre} element names (real Forge
+     * {@code ElementType.name()}, e.g. {@code "CROSSHAIRS"}) - reset at the top of every
+     * {@link #renderHud} call, BEFORE any of its own early returns, so a cancellation never
+     * survives past the exact frame that produced it (the player stops riding, the legacy HUD
+     * gets toggled off, the bridge disappears - the native element must come back immediately,
+     * not stay hidden). {@link LegacyHudPatcher} patches {@code Hud.extractRenderState} to call
+     * {@link #renderHud} as its very FIRST instruction, so every per-element guard it also
+     * inserts (later in that same method) already sees this frame's fresh value. A plain
+     * reference swap either way - no lookup table, no per-frame allocation on this class's part.
+     */
+    private static volatile java.util.Set<String> suppressedElements = java.util.Collections.emptySet();
+
+    /**
+     * True when a legacy mod cancelled this Forge {@code RenderGameOverlayEvent.Pre} element
+     * during the overlay dispatch that just ran inside {@link #renderHud} - real Forge semantics
+     * for a cancelled Pre is "I am replacing this element myself", so the host's own vanilla draw
+     * of the same element must be skipped too, or both get drawn on top of each other (bug: HBM's
+     * gun HUD cancels CROSSHAIRS to draw its own, but the host's native crosshair kept drawing
+     * anyway). See {@link LegacyHudPatcher} for exactly which 26.2 {@code Hud} methods this gates
+     * and why some {@code ElementType}s can't be mapped to one.
+     */
+    public static boolean isElementSuppressed(String elementName) {
+        return elementName != null && suppressedElements.contains(elementName);
+    }
+
+    /** Test-only override (same idiom as {@code UmbShimTransformer.setExtraNoopTargetsForTest}):
+     *  drives {@link #isElementSuppressed} directly, without a live bridge/mesh. */
+    static void setSuppressedElementsForTest(java.util.Set<String> elements) {
+        suppressedElements = elements == null ? java.util.Collections.<String>emptySet() : elements;
+    }
+
     /** Host HUD seam: dispatches legacy overlay events and submits their GL-EMU mesh to 26.2. */
     public static void renderHud(net.minecraft.client.gui.GuiGraphicsExtractor graphics,
                                  net.minecraft.client.DeltaTracker delta) {
+        suppressedElements = java.util.Collections.emptySet();
         try {
             net.minecraft.client.Minecraft minecraft = net.minecraft.client.Minecraft.getInstance();
             if (graphics == null || minecraft.player == null) return;
@@ -195,6 +228,7 @@ public final class Hooks {
             float partial = delta == null ? 0.0F : delta.getGameTimeDeltaPartialTick(true);
             dev.umb.bridge.api.GlEmulationSession.Mesh mesh = bridge.renderHud(playerName, partial,
                     graphics.guiWidth(), graphics.guiHeight());
+            if (mesh != null) suppressedElements = mesh.canceledElements;
             LegacyHudPainter.paint(graphics, mesh);
         } catch (Throwable t) {
             AgentLog.error("Hooks.renderHud", t, 2);

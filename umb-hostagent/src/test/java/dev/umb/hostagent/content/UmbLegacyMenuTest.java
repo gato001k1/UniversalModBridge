@@ -1,6 +1,7 @@
 package dev.umb.hostagent.content;
 
 import dev.umb.bridge.api.StackData;
+import net.minecraft.core.component.DataComponentMap;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.inventory.MenuType;
@@ -31,6 +32,16 @@ class UmbLegacyMenuTest {
     @BeforeAll
     static void boot() {
         TestSupport.ensureBootstrapped();
+        // 26.2's item default-component binding (Holder$Reference.bindComponents) is a
+        // separate pass the plain bootstrap does not perform for vanilla items, so `new
+        // ItemStack(...)` below throws "Components not bound yet" unless this class binds
+        // the holders it constructs stacks of itself -- the same lines every sibling test
+        // class that builds vanilla stacks carries (HostPlayerImplInventoryRoundTripTest,
+        // UmbLegacyItemTest, ...). Relying on another class having run first in this JVM
+        // is the CI flake this fixes; EMPTY keeps the check (reject unmappable) intact
+        // because these tests only need construction, identity and count.
+        Items.STICK.builtInRegistryHolder().bindComponents(DataComponentMap.EMPTY);
+        Items.NETHERITE_INGOT.builtInRegistryHolder().bindComponents(DataComponentMap.EMPTY);
     }
 
     @SuppressWarnings("unchecked")

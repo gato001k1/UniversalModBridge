@@ -548,6 +548,23 @@ public final class LegacyClientFacade {
         setFirstFieldOfType(minecraft, SoundHandler.class,
                 new ForwardingSoundHandler(host, legacyPlayerName(serverPlayer)));
 
+        // Live bug (HBM Uzi playtest, round 2): the same bug-#29 class of race, two fields later.
+        // reads Minecraft.func_71410_x().thePlayer.field_71071_by directly - not the "holder"
+        // argument captureItem passes it - so it depends on the PUBLISHED singleton ALREADY
+        // having (a) a player at all (field_71439_g/field_71451_h) and (b) that player already
+        // carrying a real InventoryPlayer/PlayerCapabilities, not the ones this call is still
+        // building. Round 1 seeded (b) here but left (a) where it always was - ~15 lines further
+        // down, after the publish - so the round-1 fix only turned "player.field_71071_by is
+        // null" into "player is null": still the SAME window, just missing field_71439_g itself
+        // now instead of missing what hung off it. A concurrent installer on another thread -
+        // could publish ITS OWN still-unseeded facade over this one and be observed with a null
+        // (or player-less) Minecraft mid-draw, silently swallowed by captureItem's own catch, so
+        // the item simply never drew. Seeding safe (never-null) defaults here, BEFORE the publish
+        // services just above; the real values still overwrite these below once genuinely known.
+        seedPlaceholderPlayerState(player);
+        setField(minecraft, Minecraft.class, "field_71439_g", player);
+        setField(minecraft, Minecraft.class, "field_71451_h", player);
+
         // install() publishes the facade where concurrent render-thread singleton
         // reads can observe it - vanilla RenderItem's missing-icon path calls
         // Minecraft.func_71410_x().func_110434_K() on every draw - and a read landing
@@ -568,8 +585,8 @@ public final class LegacyClientFacade {
         // other 1.7.10 clients divide mouse coordinates by them during client ticks.
         setField(minecraft, Minecraft.class, "field_71443_c", DEFAULT_DISPLAY_WIDTH);
         setField(minecraft, Minecraft.class, "field_71440_d", DEFAULT_DISPLAY_HEIGHT);
-        setField(minecraft, Minecraft.class, "field_71439_g", player);
-        setField(minecraft, Minecraft.class, "field_71451_h", player);
+        // field_71439_g/field_71451_h (thePlayer) are already seeded above, before the singleton
+        // publish - see this method's own "round 2" comment near the top.
         setField(minecraft, Minecraft.class, "field_71441_e", world);
         setField(minecraft, Minecraft.class, "field_71474_y", settings);
         setField(minecraft, Minecraft.class, "field_71452_i", effectRenderer);
@@ -1501,6 +1518,62 @@ public final class LegacyClientFacade {
                         + sharedBindFailed.getClass().getName() + ":"
                         + String.valueOf(sharedBindFailed.getMessage()));
             }
+        }
+    }
+
+    /**
+     * Bug-#29-shaped fix, one field later (see {@link #install}'s own call site javadoc): gives
+     * a freshly {@code Unsafe}-allocated client player facade a non-null
+     * {@code field_71071_by} (InventoryPlayer) and {@code field_71075_bZ} (PlayerCapabilities)
+     * BEFORE {@code install()} publishes the facade to the static {@code Minecraft} singleton a
+     * few lines below - closing the window where a concurrent reader (any legacy renderer/
+     * handler that goes through {@code Minecraft.func_71410_x().thePlayer} instead of an
+     * explicitly passed-in player, which {@code ItemRenderWeaponBase} - every HBM weapon's
+     * held-item renderer - does) could observe a player with no inventory yet and NPE. Public,
+     * like {@link #bindSharedClientServices}, so the ordering claim is unit-testable in
+     * isolation without needing to win an actual race against {@link #install}.
+     */
+    public static void seedPlaceholderPlayerState(net.minecraft.entity.player.EntityPlayer player) {
+        if (player == null) return;
+        if (readField(player, net.minecraft.entity.player.EntityPlayer.class, "field_71071_by") == null) {
+            setField(player, net.minecraft.entity.player.EntityPlayer.class, "field_71071_by",
+                    new net.minecraft.entity.player.InventoryPlayer(player));
+        }
+        if (readField(player, net.minecraft.entity.player.EntityPlayer.class, "field_71075_bZ") == null) {
+            setField(player, net.minecraft.entity.player.EntityPlayer.class, "field_71075_bZ",
+                    new net.minecraft.entity.player.PlayerCapabilities());
+        }
+    }
+
+    /**
+     * Live bug (HBM Uzi playtest, round 2 follow-up): {@link #install} closes the window between
+     * its OWN publish and its OWN full seeding, but a capture call still has an exposure window
+     * of its own - between {@code install()} returning and the moment it actually invokes legacy
+     * rendering code - during which some UNRELATED concurrent {@code install()} (a client-tick
+     * facade rebuild on another thread, for one real example already elsewhere in this codebase)
+     * could publish an entirely different, possibly still-mid-construction facade over this
+     * call's own. A legacy renderer that reads {@code Minecraft.func_71410_x()} instead of an
+     * see THAT facade, not this capture's own correctly-built one.
+     *
+     * <p>Callers that are about to invoke such legacy code should re-pin the singleton to their
+     * OWN already-built facade immediately before the call, and restore whatever was there before
+     * immediately after (a {@code finally} block), keeping the exposure window as small as the
+     * actual render call itself instead of everything since {@code install()} returned. See
+     * {@link dev.umb.legacy.legacyside.render.LegacyRenderCapture#captureItem} for the first use.
+     */
+    public static Minecraft pinSingleton(Minecraft minecraft) {
+        if (minecraft == null) return null;
+        Minecraft previous = Minecraft.func_71410_x();
+        set(Minecraft.class, "field_71432_P", null, minecraft);
+        return previous;
+    }
+
+    /** Restores whatever {@link #pinSingleton} returned; {@code null} is a legitimate "nothing
+     *  was published yet" prior state and is written back as-is. Restores only if the singleton
+     *  has not been changed since it was pinned. */
+    public static void restoreSingleton(Minecraft pinned, Minecraft previous) {
+        if (Minecraft.func_71410_x() == pinned) {
+            set(Minecraft.class, "field_71432_P", null, previous);
         }
     }
 

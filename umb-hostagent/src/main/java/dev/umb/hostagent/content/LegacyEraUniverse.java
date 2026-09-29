@@ -460,6 +460,18 @@ public abstract class LegacyEraUniverse implements LegacyBridge {
     }
 
     @Override
+    public java.util.List<dev.umb.bridge.api.LegacyBridge.KeyBindingData> keyBindings() {
+        LegacyBridge r = peek();
+        return r == null ? java.util.Collections.emptyList() : r.keyBindings();
+    }
+
+    @Override
+    public boolean setKeyBinding(String stableId, int legacyCode) {
+        LegacyBridge r = peek();
+        return r != null && r.setKeyBinding(stableId, legacyCode);
+    }
+
+    @Override
     public java.util.List<dev.umb.bridge.api.EffectData> drainClientEffects() {
         LegacyBridge r = peek();
         if (r == null) return java.util.Collections.emptyList();

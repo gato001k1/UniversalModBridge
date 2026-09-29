@@ -433,4 +433,15 @@ class HostWorldImplTest {
         assertTrue(HostWorldImpl.vehicleChainContains(seatTwin, seatTwin),
                 "a chain trivially contains its own starting root");
     }
+
+    @Test
+    void getBlockIdReturnsAirWhenCalledOffThread() throws Exception {
+        HostWorldImpl world = TestSupport.allocate(HostWorldImpl.class);
+        Thread otherThread = new Thread();
+        java.lang.reflect.Field f = HostWorldImpl.class.getDeclaredField("serverThread");
+        f.setAccessible(true);
+        f.set(world, otherThread);
+        String id = world.getBlockId(0, 0, 0);
+        assertEquals("minecraft:air", id, "Off-thread chunk block reads must return air");
+    }
 }

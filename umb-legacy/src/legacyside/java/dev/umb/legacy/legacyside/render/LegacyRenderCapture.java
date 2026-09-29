@@ -413,19 +413,43 @@ public final class LegacyRenderCapture {
                 c.enable(GL_LIGHTING);
                 ACTIVE.set(c);
                 ACTIVE_MINECRAFT.set(binding.minecraft);
-                // Forge 1.7.10 passes a RenderBlocks first: ENTITY (rb, EntityItem), EQUIPPED and
-                // EQUIPPED_FIRST_PERSON (rb, holder), INVENTORY (rb). Renderers index into this.
-                net.minecraft.client.renderer.RenderBlocks renderBlocks = itemRenderBlocks();
-                Object[] args;
-                if (renderType == IItemRenderer.ItemRenderType.ENTITY)
-                    args = new Object[] {renderBlocks, new EntityItem(binding.world, 0.0D, 0.0D, 0.0D, stack)};
-                else if (renderType == IItemRenderer.ItemRenderType.INVENTORY)
-                    args = new Object[] {renderBlocks};
-                else
-                    args = new Object[] {renderBlocks, binding.player};
-                renderer.renderItem(renderType, stack, args);
+                // Live bug (HBM Uzi playtest, round 2): install() already publishes binding.minecraft
+                // as the static Minecraft singleton, but an UNRELATED concurrent install() elsewhere
+                // (a client-tick facade rebuild, for one real example) can still publish a different,
+                // possibly still-mid-construction facade over it between install() returning above and
+                // renderer.renderItem() actually running below - every HBM weapon renderer reads
+                // Minecraft.func_71410_x() directly instead of the holder argument. Re-pin to THIS
+                // call's own facade immediately before the render, restore whatever was there
+                // immediately after: see LegacyClientFacade.pinSingleton's own javadoc.
+                net.minecraft.client.Minecraft previousSingleton = LegacyClientFacade.pinSingleton(binding.minecraft);
+                try {
+                    // Forge 1.7.10 passes a RenderBlocks first: ENTITY (rb, EntityItem), EQUIPPED and
+                    // EQUIPPED_FIRST_PERSON (rb, holder), INVENTORY (rb). Renderers index into this.
+                    net.minecraft.client.renderer.RenderBlocks renderBlocks = itemRenderBlocks();
+                    Object[] args;
+                    if (renderType == IItemRenderer.ItemRenderType.ENTITY)
+                        args = new Object[] {renderBlocks, new EntityItem(binding.world, 0.0D, 0.0D, 0.0D, stack)};
+                    else if (renderType == IItemRenderer.ItemRenderType.INVENTORY)
+                        args = new Object[] {renderBlocks};
+                    else
+                        args = new Object[] {renderBlocks, binding.player};
+                    renderer.renderItem(renderType, stack, args);
+                } finally {
+                    LegacyClientFacade.restoreSingleton(binding.minecraft, previousSingleton);
+                }
                 c.finish();
-                return c.result();
+                EntityRenderCapture result = c.result();
+                // Live bug (HBM Uzi playtest, round 2): INVENTORY renders "handled=true" and
+                // never logs a skip/failure, yet no icon appears - the render call completes
+                // without throwing, but something between here and the host GUI item renderer
+                // (HeldItemSpecialRenderer.submit, LegacyItemCaptureClient) ends up with zero
+                // usable geometry. One line per key, not rate-limited into silence, so the next
+                // live capture answers "did this call itself ever record any draws" directly
+                // instead of needing another guess.
+                logRateLimited(DIAGNOSTIC_LOG_NANOS, "item-capture-result:" + key,
+                        "[UMB-LEGACY] item capture result key=" + key + " draws=" + result.draws.size()
+                                + " vertices=" + result.vertexCount() + " transformOnly=" + transformOnly);
+                return result;
             } catch (Throwable failure) {
                 logRateLimited(FAILURE_LOG_NANOS, "item-capture:" + key,
                         "[UMB-LEGACY] item render skipped key=" + key + " reason=" + reason(failure));

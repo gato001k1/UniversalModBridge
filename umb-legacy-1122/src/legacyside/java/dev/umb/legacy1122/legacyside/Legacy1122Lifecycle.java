@@ -80,9 +80,9 @@ final class Legacy1122Lifecycle {
             // reset called from here after the fact - is what actually closes the window: the
             // exclusion call and the broken class load it causes both happen inside the SAME
             // coremod constructor invocation below, before this method ever gets control back).
-            List<String> coremods = Legacy1122CoremodLoader.discoverAndRegister(loader, modJars, log);
-            if (!coremods.isEmpty()) {
-                log.accept("UMB-BRIDGE-1122 coremods discovered: " + coremods);
+            Legacy1122CoremodLoader.Discovery coremods = Legacy1122CoremodLoader.discoverAndRegister(loader, modJars, log);
+            if (!coremods.plugins.isEmpty()) {
+                log.accept("UMB-BRIDGE-1122 coremods discovered: " + coremods.plugins);
             }
             Class<?> injection = Class.forName("net.minecraftforge.fml.relauncher.FMLInjectionData", true, loader);
             Field containers = injection.getField("containers");
@@ -92,6 +92,20 @@ final class Legacy1122Lifecycle {
                 list.clear();
                 list.add("net.minecraftforge.fml.common.FMLContainer");
                 list.add("net.minecraftforge.common.ForgeModContainer");
+                // Real CoreModManager wraps a coremod-declared getModContainerClass() into an
+                // Loader.identifyMods(): it does `injectedContainers.addAll(...)`, then
+                // `Class.forName(name, true, modClassLoader).newInstance()` on every entry, wraps
+                // each result in `new InjectedModContainer(container, container.getSource())`, and
+                // adds it to Loader.mods - the exact same list FMLContainer/ForgeModContainer just
+                // went into above). Without this, a coremod-only mod (no separate @Mod class of its
+                // own - MixinBooter's manifest has no FMLCorePluginContainsFMLMod, confirmed) never
+                // becomes a real, dependency-checkable ModContainer, so any mod declaring
+                // @Mod(dependencies="required-after:mixinbooter...") fails Loader.sortModList()
+                // with MissingModsException even though MixinBooter's own coremod loaded and ran
+                // fine (proven live: universal-tweaks, packet-fixer). Universal by construction:
+                // whatever getModContainerClass() a coremod declares gets added here, not a
+                // hardcoded mixinbooter special case.
+                list.addAll(coremods.modContainerClasses);
             }
             Method build = findMethod(injection, "build", 2);
             build.setAccessible(true);

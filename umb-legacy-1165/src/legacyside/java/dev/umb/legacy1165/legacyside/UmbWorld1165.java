@@ -133,16 +133,49 @@ public class UmbWorld1165 extends World {
         long key = net.minecraft.util.math.ChunkPos.func_77272_a(chunkX, chunkZ);
         net.minecraft.world.chunk.Chunk chunk = compatibilityChunks.get(Long.valueOf(key));
         if (chunk == null) {
-            chunk = new net.minecraft.world.chunk.Chunk(this,
-                    new net.minecraft.util.math.ChunkPos(chunkX, chunkZ), null);
+            chunk = new HostBackedChunk(this, new net.minecraft.util.math.ChunkPos(chunkX, chunkZ));
             compatibilityChunks.put(Long.valueOf(key), chunk);
         }
         return chunk;
     }
 
+    /**
+     * A compatibility chunk whose block and fluid reads come from the facade (i.e. the host
+     * world), not from its own empty sections. Vanilla code that reads blocks through CHUNKS
+     * instead of the world, above all the pathfinder (PathNavigator builds a Region over
+     * world.getChunk and reads IChunk.getBlockState), otherwise sees an all-air world: no ground,
+     * no walkable node, no path (live: mobs looked around but never walked).
+     * Fluids derive from the block state (a World.getFluidState call would come straight back
+     * here through getChunkAt).
+     */
+    static final class HostBackedChunk extends net.minecraft.world.chunk.Chunk {
+        private final UmbWorld1165 facade;
+
+        HostBackedChunk(UmbWorld1165 facade, net.minecraft.util.math.ChunkPos pos) {
+            super(facade, pos, null);
+            this.facade = facade;
+        }
+
+        @Override
+        public BlockState func_180495_p(BlockPos pos) {
+            return facade.func_180495_p(pos);
+        }
+
+        @Override
+        public net.minecraft.fluid.FluidState func_204610_c(BlockPos pos) {
+            BlockState state = facade.func_180495_p(pos);
+            return state == null ? net.minecraft.fluid.Fluids.field_204541_a.func_207188_f()
+                    : state.func_204520_s();
+        }
+    }
+
     // ---- construction ingredients ----
 
     private static ISpawnWorldInfo fakeInfo() {
+        // Both are read unconditionally by vanilla AI (ResetAngerGoal reads a game rule; attack
+        // damage and spawning read difficulty), so null is never legal: a fresh world's REAL
+        // defaults - vanilla GameRules() and NORMAL difficulty (PEACEFUL would despawn mobs).
+        final net.minecraft.world.GameRules rules = new net.minecraft.world.GameRules();
         return (ISpawnWorldInfo) java.lang.reflect.Proxy.newProxyInstance(
                 UmbWorld1165.class.getClassLoader(),
                 new Class<?>[] { ISpawnWorldInfo.class },
@@ -151,16 +184,32 @@ public class UmbWorld1165 extends World {
                     public Object invoke(Object proxy, java.lang.reflect.Method method,
                             Object[] args) {
                         Class<?> ret = method.getReturnType();
-                        if (ret == boolean.class) {
-                            return Boolean.FALSE;
+                        if (ret == net.minecraft.world.GameRules.class) return rules;
+                        if (ret == net.minecraft.world.Difficulty.class) {
+                            return net.minecraft.world.Difficulty.NORMAL;
                         }
-                        if (ret == int.class || ret == long.class || ret == float.class
-                                || ret == double.class) {
-                            return 0;
-                        }
-                        return null;
+                        return typedDefault(ret);
                     }
                 });
+    }
+
+    /**
+     * The resting value a proxy must return for {@code ret}, boxed as EXACTLY that primitive's
+     * wrapper: a Proxy unboxes the handler's result to the declared type, so returning Integer 0
+     * for a long method (World.getGameTime -> worldInfo.getGameTime) throws ClassCastException
+     * in the caller (live: every mob AI goal reading game time poisoned the entity on its first
+     * tick). Reference types get null.
+     */
+    static Object typedDefault(Class<?> ret) {
+        if (ret == boolean.class) return Boolean.FALSE;
+        if (ret == int.class) return Integer.valueOf(0);
+        if (ret == long.class) return Long.valueOf(0L);
+        if (ret == float.class) return Float.valueOf(0.0F);
+        if (ret == double.class) return Double.valueOf(0.0D);
+        if (ret == short.class) return Short.valueOf((short) 0);
+        if (ret == byte.class) return Byte.valueOf((byte) 0);
+        if (ret == char.class) return Character.valueOf('\0');
+        return null;
     }
 
     private static DimensionType overworldDimension() {
@@ -192,15 +241,7 @@ public class UmbWorld1165 extends World {
                             @Override
                             public Object invoke(Object proxy, java.lang.reflect.Method method,
                                     Object[] args) {
-                                Class<?> ret = method.getReturnType();
-                                if (ret == boolean.class) {
-                                    return Boolean.FALSE;
-                                }
-                                if (ret == int.class || ret == long.class || ret == float.class
-                                        || ret == double.class) {
-                                    return 0;
-                                }
-                                return null;
+                                return typedDefault(method.getReturnType());
                             }
                         });
             }
@@ -475,7 +516,7 @@ public class UmbWorld1165 extends World {
                 host.log("ENTITY-DIAG 1165 spawnEntityInWorld class=" + entity.getClass().getName()
                         + " owner=" + handle.ownerNamespace() + " twinned=" + twinned
                         + " pos=" + entity.func_226277_ct_() + "," + entity.func_226278_cu_() + ","
-                        + entity.func_226279_cv_());
+                        + entity.func_226281_cx_());
             }
             return true;
         } catch (Throwable t) {
@@ -639,9 +680,54 @@ public class UmbWorld1165 extends World {
         // IWorld stub: block-event delivery has no listeners headlessly.
     }
 
+    /**
+     * A real, empty vanilla scoreboard (no teams, no objectives - what a fresh world has).
+     * Entity.getTeam() reads world.getScoreboard().getPlayersTeam(name) unconditionally, both in
+     * renderers (LivingRenderer name/visibility checks: live, every mob capture NPE'd) and in
+     * AI/combat (isOnSameTeam); null is never a legal answer for vanilla callers.
+     */
+    private final net.minecraft.scoreboard.Scoreboard scoreboard =
+            new net.minecraft.scoreboard.Scoreboard();
+
+    /** Highest block the sky-light column scan looks at (1.16.5 overworld build height). */
+    static final int SKY_SCAN_TOP = 255;
+
+    /**
+     * Light without a lighting engine. This facade's chunk provider has no WorldLightManager,
+     * and every vanilla light read (IBlockDisplayReader.getLightFor/getLightSubtracted/
+     * canSeeSky) goes through it. Mob AI reads light routinely: path scoring
+     * (AnimalEntity.getBlockPathWeight -> world.getLight) ran into the null manager as soon as
+     * a mob tried to wander (live: the mob stood still, headless: its tick poisoned).
+     * The answer is derived from the same host-backed block states the facade serves: sky light
+     * is 15 while every block above lets skylight through (propagatesSkylightDown), else 0;
+     * block light is 0 (emitters are not tracked). That is vanilla's value for open-sky and
+     * fully covered positions, which is what wandering, spawning and burning checks care about.
+     */
+    @Override
+    public int func_226658_a_(net.minecraft.world.LightType type, BlockPos pos) {
+        if (type != net.minecraft.world.LightType.SKY || pos == null) return 0;
+        return skyVisible(pos) ? 15 : 0;
+    }
+
+    @Override
+    public int func_226659_b_(BlockPos pos, int skyDarkening) {
+        return Math.max(0, func_226658_a_(net.minecraft.world.LightType.SKY, pos) - skyDarkening);
+    }
+
+    private boolean skyVisible(BlockPos pos) {
+        BlockPos.Mutable cursor = new BlockPos.Mutable(pos.func_177958_n(), pos.func_177956_o(),
+                pos.func_177952_p());
+        for (int y = pos.func_177956_o() + 1; y <= SKY_SCAN_TOP; y++) {
+            cursor.func_181079_c(pos.func_177958_n(), y, pos.func_177952_p());
+            BlockState above = func_180495_p(cursor);
+            if (above != null && !above.func_200131_a(this, cursor)) return false;
+        }
+        return true;
+    }
+
     @Override
     public net.minecraft.scoreboard.Scoreboard func_96441_U() {
-        return null;
+        return scoreboard;
     }
 
     @Override

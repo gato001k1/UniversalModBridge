@@ -39,7 +39,6 @@ import net.minecraftforge.registries.ForgeRegistries;
  * container and slots. Everything else stays an honest stub (never throws across the
  * boundary).
  *
- * <p>Metadata-free keying (lead direction, round 4): blocks are keyed by registry id; the
  * block's variant is the per-block state-list index defined by {@link UmbWorld1165}
  * ({@code meta} = index into the block's own valid-state list, Forge order). The additive
  * contract proposal stays text-only; every method here speaks the EXISTING contract.</p>
@@ -345,7 +344,7 @@ public final class Legacy1165BridgeImpl implements LegacyBridge {
         if (host != null) {
             host.log("ENTITY-DIAG 1165 spawn egg type=" + type.func_220348_g()
                     + " added=" + added + " pos=" + entity.func_226277_ct_() + ","
-                    + entity.func_226278_cu_() + "," + entity.func_226279_cv_());
+                    + entity.func_226278_cu_() + "," + entity.func_226281_cx_());
         }
         return added;
     }
@@ -363,7 +362,6 @@ public final class Legacy1165BridgeImpl implements LegacyBridge {
 
     @Override
     public EntityHandle restoreEntity(byte[] nbt) {
-        // honest stub: entity twins are a later lane (same as before).
         return null;
     }
 

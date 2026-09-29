@@ -146,6 +146,8 @@ final class UmbServer1165 {
             DedicatedServer server = UmbUnsafe1165.allocate(DedicatedServer.class);
             UmbUnsafe1165.setField(server,
                     UmbUnsafe1165.field(MinecraftServer.class, "field_195576_ac"), registries);
+            UmbUnsafe1165.setField(server,
+                    UmbUnsafe1165.field(MinecraftServer.class, "field_71318_t"), emptyPlayerList(server));
 
             // Forge APIs such as ServerLifecycleHooks use this same child-universe identity.
             if (ServerLifecycleHooks.getCurrentServer() == null) {
@@ -161,6 +163,42 @@ final class UmbServer1165 {
         } catch (Throwable t) {
             throw new IllegalStateException("cannot create headless server resource facade", t);
         }
+    }
+
+    /**
+     * A real, EMPTY player list for the facade server. Mod code reads
+     * {@code server.getPlayerList()} unconditionally, e.g. a library's "send to all players"
+     * helper called from an entity tick (live: Citadel.sendMSGToAll from an animated mob's
+     * tick NPE'd, the handle poisoned itself and the host discarded the twin). This universe
+     * has no ServerPlayerEntity of its own, so the honest answer is an empty list: broadcasts
+     * reach nobody, lookups find nobody.
+     *
+     * <p>The concrete DedicatedPlayerList constructor reads server properties and player-data
+     * files, so it is allocated without it and every collection field a caller can reach is
+     * (Forge) its read-only view, field_177454_f uuid map, field_148547_k stats and
+     * field_192055_p advancements maps) plus the owning server (field_72400_f).</p>
+     */
+    static net.minecraft.server.management.PlayerList emptyPlayerList(MinecraftServer server) {
+        Class<net.minecraft.server.management.PlayerList> base =
+                net.minecraft.server.management.PlayerList.class;
+        net.minecraft.server.management.PlayerList list =
+                UmbUnsafe1165.allocate(net.minecraft.server.dedicated.DedicatedPlayerList.class);
+        java.util.List<Object> players = new java.util.ArrayList<Object>();
+        UmbUnsafe1165.setField(list, UmbUnsafe1165.field(base, "field_72400_f"), server);
+        UmbUnsafe1165.setField(list, UmbUnsafe1165.field(base, "field_72404_b"), players);
+        try {
+            UmbUnsafe1165.setField(list, UmbUnsafe1165.field(base, "playersView"),
+                    java.util.Collections.unmodifiableList(players));
+        } catch (Throwable absent) {
+            // Unpatched jar without Forge's view field: getPlayers returns the list itself.
+        }
+        UmbUnsafe1165.setField(list, UmbUnsafe1165.field(base, "field_177454_f"),
+                new java.util.HashMap<Object, Object>());
+        UmbUnsafe1165.setField(list, UmbUnsafe1165.field(base, "field_148547_k"),
+                new java.util.HashMap<Object, Object>());
+        UmbUnsafe1165.setField(list, UmbUnsafe1165.field(base, "field_192055_p"),
+                new java.util.HashMap<Object, Object>());
+        return list;
     }
 
     private static ThreadFactory named(final String name) {

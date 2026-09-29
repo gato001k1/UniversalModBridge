@@ -95,11 +95,30 @@ public final class GlEmulationSession {
         public final int matrixOps;
         public final int pushes;
         public final int pops;
+        /**
+         * Forge {@code RenderGameOverlayEvent.Pre}'s {@code ElementType.name()} (e.g.
+         * {@code "CROSSHAIRS"}) for every vanilla overlay element a legacy mod cancelled while
+         * this mesh's frame was captured - empty (the shared, allocation-free
+         * {@link Collections#emptySet()}) whenever nothing was cancelled, which is the
+         * overwhelming common case. The host side ({@code Hooks.renderHud} /
+         * {@code LegacyHudPatcher}) reads this once per frame to suppress its own matching
+         * vanilla draw, mirroring real Forge semantics: a cancelled Pre means "I drew this
+         * element myself, don't also draw the native one".
+         */
+        public final Set<String> canceledElements;
+
         Mesh(List<Draw> draws, int matrixOps, int pushes, int pops) {
+            this(draws, matrixOps, pushes, pops, Collections.<String>emptySet());
+        }
+
+        Mesh(List<Draw> draws, int matrixOps, int pushes, int pops, Set<String> canceledElements) {
             this.draws = Collections.unmodifiableList(new ArrayList<Draw>(draws));
             this.matrixOps = matrixOps;
             this.pushes = pushes;
             this.pops = pops;
+            this.canceledElements = canceledElements == null || canceledElements.isEmpty()
+                    ? Collections.<String>emptySet()
+                    : Collections.unmodifiableSet(new LinkedHashSet<String>(canceledElements));
         }
         public int vertexCount() {
             int count = 0;
@@ -108,15 +127,35 @@ public final class GlEmulationSession {
         }
     }
 
-    /** Combines independently captured overlay phases without exposing mutable session state. */
+    /** Combines independently captured overlay phases without exposing mutable session state.
+     *  Unions {@code canceledElements} too (still allocation-free whenever both sides are the
+     *  shared empty set, i.e. every frame with nothing cancelled). */
     public static Mesh concat(Mesh first, Mesh second) {
         if (first == null) return second;
         if (second == null) return first;
         List<Draw> joined = new ArrayList<Draw>(first.draws.size() + second.draws.size());
         joined.addAll(first.draws);
         joined.addAll(second.draws);
+        Set<String> canceled;
+        if (first.canceledElements.isEmpty()) {
+            canceled = second.canceledElements;
+        } else if (second.canceledElements.isEmpty()) {
+            canceled = first.canceledElements;
+        } else {
+            canceled = new LinkedHashSet<String>(first.canceledElements);
+            canceled.addAll(second.canceledElements);
+        }
         return new Mesh(joined, first.matrixOps + second.matrixOps,
-                first.pushes + second.pushes, first.pops + second.pops);
+                first.pushes + second.pushes, first.pops + second.pops, canceled);
+    }
+
+    /** Attaches {@code canceledElements} to {@code mesh} without touching its draws - a no-op
+     *  (returns {@code mesh} itself) when the set is null/empty, so a frame with nothing
+     *  cancelled (the common case) never allocates a new Mesh here either. */
+    public static Mesh withCanceledElements(Mesh mesh, Set<String> canceledElements) {
+        if (mesh == null) return null;
+        if (canceledElements == null || canceledElements.isEmpty()) return mesh;
+        return new Mesh(mesh.draws, mesh.matrixOps, mesh.pushes, mesh.pops, canceledElements);
     }
 
     private static final class ListBuilder {

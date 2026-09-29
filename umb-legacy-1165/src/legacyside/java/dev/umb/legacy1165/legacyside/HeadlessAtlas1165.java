@@ -79,6 +79,65 @@ public final class HeadlessAtlas1165 {
     private HeadlessAtlas1165() {
     }
 
+    /** One placed sprite frame: its own texture id and pixel rect on the sheet. */
+    static final class Frame {
+        final String texture;
+        final int x, y, w, h;
+
+        Frame(String texture, int x, int y, int w, int h) {
+            this.texture = texture;
+            this.x = x; this.y = y; this.w = w; this.h = h;
+        }
+    }
+
+    /**
+     * Frames placed so far, per atlas location string. A captured draw bound to one of these
+     * atlases carries UVs into THIS private sheet, which no host has; {@link #spriteUv} maps
+     * them back to the sprite's own PNG (the host resolves that like any mod texture).
+     */
+    private static final Map<String, List<Frame>> FRAMES = new ConcurrentHashMap<String, List<Frame>>();
+
+    static void recordFrame(String atlas, String sprite, int x, int y, int w, int h) {
+        List<Frame> frames = FRAMES.get(atlas);
+        if (frames == null) {
+            List<Frame> created = new java.util.concurrent.CopyOnWriteArrayList<Frame>();
+            List<Frame> raced = FRAMES.putIfAbsent(atlas, created);
+            frames = raced == null ? created : raced;
+        }
+        frames.add(new Frame(sprite, x, y, w, h));
+    }
+
+    /** True when {@code texture} names an atlas this headless universe packed sprites into. */
+    public static boolean isHeadlessAtlas(String texture) {
+        return texture != null && FRAMES.containsKey(texture);
+    }
+
+    /**
+     * Maps an atlas-space UV to the sprite holding it: {@code {texture, localU, localV}} with
+     * texture = the sprite PNG ({@code ns:textures/<path>.png}) and local UVs in 0..1 of that
+     * image; null when the atlas is unknown or the UV lies in no frame. {@code probeU/probeV}
+     * pick the frame (a quad's centroid, robust to UVs on the frame's edge); {@code u/v} are
+     * converted.
+     */
+    public static Object[] spriteUv(String atlas, float probeU, float probeV, float u, float v) {
+        List<Frame> frames = atlas == null ? null : FRAMES.get(atlas);
+        if (frames == null) return null;
+        float px = probeU * ATLAS_W, py = probeV * ATLAS_H;
+        for (Frame f : frames) {
+            if (px >= f.x && px <= f.x + f.w && py >= f.y && py <= f.y + f.h) {
+                float lu = (u * ATLAS_W - f.x) / f.w;
+                float lv = (v * ATLAS_H - f.y) / f.h;
+                return new Object[] {f.texture, Float.valueOf(lu), Float.valueOf(lv)};
+            }
+        }
+        return null;
+    }
+
+    /** Sprite id {@code ns:path} -> the PNG id the host resolves: {@code ns:textures/path.png}. */
+    static String spriteTextureId(ResourceLocation sprite) {
+        return sprite.func_110624_b() + ":textures/" + sprite.func_110623_a() + ".png";
+    }
+
     /**
      * Builds one demand-filled {@code AtlasTexture} per vanilla atlas location
      * and installs the resulting {@code SpriteMap} into {@code models}
@@ -310,6 +369,8 @@ public final class HeadlessAtlas1165 {
                                     1, false));
                     TextureAtlasSprite sprite = HeadlessSprite.create(atlas, info, image,
                             frame[0], frame[1]);
+                    recordFrame(String.valueOf(atlas.func_229223_g_()), spriteTextureId(texture),
+                            frame[0], frame[1], width, height);
                     log.accept("[headless-atlas] sprite " + texture + " " + width + "x"
                             + height + " @(" + frame[0] + "," + frame[1] + ") from "
                             + jar.getName());

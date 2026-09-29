@@ -27,12 +27,23 @@ final class EntityHandle1165 implements EntityHandle {
     public void tick() {
         if (poisoned || !isValid()) return;
         try {
+            // Vanilla ServerWorld.tick calls Entity.checkDespawn (func_70623_bb) for every entity
+            // timer is reset while a player is within 32 blocks; without it idleTime only grows,
+            // and after 100 ticks the wander/look-around goals refuse to start, so the mob stands
+            // still forever (live: the grizzly turned but never walked).
+            entity.func_70623_bb();
+            if (entity.field_70128_L) return;
             entity.func_70071_h_();
         } catch (Throwable t) {
             poisoned = true;
-            poisonReason = String.valueOf(t);
+            poisonReason = LegacyEntityCapture1165.describe(t) + " at "
+                    + LegacyEntityCapture1165.frames(t, 10);
+            // Once per entity (the handle poisons itself): the frames name the failing call.
+            // isValid() is now false, so the host discards this entity's twin (it vanishes and
+            // leaves legacy_entities): say so, with where it was, to make that traceable.
             System.err.println("[UMB-ENTITY-1165] tick failed for " + entity.getClass().getName()
-                    + ": " + t);
+                    + " at " + getX() + "," + getY() + "," + getZ()
+                    + " (handle poisoned, host twin will be discarded): " + poisonReason);
         }
     }
     @Override

@@ -120,6 +120,23 @@ public final class LegacyKeyBindingSynthesis {
         return stableId == null ? null : CODE_BY_ID.get(stableId);
     }
 
+    /** Updates the mirror index after a Controls-screen rebind. */
+    public static synchronized boolean updateCode(String stableId, int newCode) {
+        KeyBinding binding = bindingFor(stableId);
+        Integer old = CODE_BY_ID.get(stableId);
+        if (binding == null || old == null) return false;
+        List<KeyBinding> oldList = BY_CODE.get(old);
+        if (oldList != null) oldList.remove(binding);
+        List<KeyBinding> newList = BY_CODE.get(Integer.valueOf(newCode));
+        if (newList == null) {
+            newList = new ArrayList<KeyBinding>();
+            BY_CODE.put(Integer.valueOf(newCode), newList);
+        }
+        if (!newList.contains(binding)) newList.add(binding);
+        CODE_BY_ID.put(stableId, Integer.valueOf(newCode));
+        return true;
+    }
+
     /** Every synthesized instance registered under an LWJGL2 code (never null, possibly empty). */
     public static List<KeyBinding> bindingsForCode(int lwjglCode) {
         List<KeyBinding> found = BY_CODE.get(Integer.valueOf(lwjglCode));
@@ -189,7 +206,7 @@ public final class LegacyKeyBindingSynthesis {
             skipped++;
             return false;
         }
-        String registered = LegacyKeyBindingRegistry.register(binding);
+        String registered = LegacyKeyBindingRegistry.register(binding, namespace);
         CODE_BY_ID.put(stableId, Integer.valueOf(keyCode));
         BY_ID.put(stableId, binding);
         synchronized (BY_CODE) {

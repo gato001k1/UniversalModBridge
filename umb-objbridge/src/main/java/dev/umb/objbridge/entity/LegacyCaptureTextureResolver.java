@@ -38,6 +38,7 @@ public final class LegacyCaptureTextureResolver {
         if (missingKey != null) MISSING.remove(id, missingKey);
         Long retryAfter = RETRY_AFTER_NANOS.get(id);
         if (retryAfter != null && System.nanoTime() < retryAfter.longValue()) return;
+        if ((source == null || !Files.isRegularFile(source)) && uploadFromAssetJars(id)) return;
         if (source == null || !Files.isRegularFile(source)) {
             String path = sourceKey == null ? "asset-root-unavailable" : sourceKey;
             if (source != null) MISSING.putIfAbsent(id, path);
@@ -65,6 +66,73 @@ public final class LegacyCaptureTextureResolver {
                         + " resolved=" + source.toAbsolutePath() + " upload=failed reason="
                         + reason(failure));
             }
+        }
+    }
+
+    /**
+     * Mod jars whose assets captured draws may name, published by universes that are not in
+     * the ObjBridge manifest (isolated eras: their mod jars are never extracted into an asset
+     * root). {@link java.io.File#pathSeparator}-separated jar paths; append-only.
+     */
+    public static final String ASSET_JARS_PROPERTY = "umb.capture.assetJars";
+
+    /** Entry name of an identifier's image inside a mod jar: {@code assets/<ns>/<path>.png}. */
+    static String jarEntry(Identifier id) {
+        String path = id.getPath();
+        if (!path.toLowerCase(Locale.ROOT).endsWith(".png")) path += ".png";
+        return "assets/" + id.getNamespace() + "/" + path;
+    }
+
+    /** Reads the image bytes for {@code id} from the published asset jars, or null. */
+    /** id -> the jar list it was last missing from (a newly published jar retries it). */
+    private static final Map<Identifier, String> JAR_MISSES = new ConcurrentHashMap<>();
+
+    static byte[] readFromAssetJars(Identifier id) {
+        String jars = System.getProperty(ASSET_JARS_PROPERTY, "");
+        if (jars.isEmpty() || jars.equals(JAR_MISSES.get(id))) return null;
+        byte[] found = scanAssetJars(id, jars);
+        if (found == null) JAR_MISSES.put(id, jars);
+        return found;
+    }
+
+    private static byte[] scanAssetJars(Identifier id, String jars) {
+        String entryName = jarEntry(id);
+        for (String part : jars.split(java.util.regex.Pattern.quote(java.io.File.pathSeparator))) {
+            String jar = part.trim();
+            if (jar.isEmpty()) continue;
+            try (java.util.zip.ZipFile zip = new java.util.zip.ZipFile(jar)) {
+                java.util.zip.ZipEntry entry = zip.getEntry(entryName);
+                if (entry == null) continue;
+                try (InputStream in = zip.getInputStream(entry)) {
+                    return in.readAllBytes();
+                }
+            } catch (Throwable ignored) {
+                // A missing/unreadable jar never blocks the other roots.
+            }
+        }
+        return null;
+    }
+
+    private static boolean uploadFromAssetJars(Identifier id) {
+        byte[] bytes = readFromAssetJars(id);
+        if (bytes == null) return false;
+        try (InputStream in = new java.io.ByteArrayInputStream(bytes)) {
+            NativeImage image = NativeImage.read(in);
+            DynamicTexture texture = new DynamicTexture(() -> "umb-capture " + id, image);
+            Minecraft.getInstance().getTextureManager().register(id, texture);
+            REGISTERED.add(id);
+            if (REPORTED.add(id)) {
+                System.out.println("[UMB-OBJBRIDGE] [CAPTURE-TEXTURE] id=" + id
+                        + " resolved=jar:" + jarEntry(id) + " upload=dynamic");
+            }
+            return true;
+        } catch (Throwable failure) {
+            RETRY_AFTER_NANOS.put(id, System.nanoTime() + 1_000_000_000L);
+            if (REPORTED.add(id)) {
+                System.out.println("[UMB-OBJBRIDGE] [CAPTURE-TEXTURE] id=" + id
+                        + " resolved=jar:" + jarEntry(id) + " upload=failed reason=" + reason(failure));
+            }
+            return true;
         }
     }
 

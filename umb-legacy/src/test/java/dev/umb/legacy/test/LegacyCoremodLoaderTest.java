@@ -70,6 +70,39 @@ class LegacyCoremodLoaderTest {
         }
     }
 
+    /**
+     * Proves the ordering fix described in {@code LegacyCoremodLoader.discoverAndRegister}'s own
+     * {@code Legacy1122CoremodLoader}): coremods must be scanned in FILENAME order, not whichever
+     * order their URLs happen to be on the loader. The loader is given the alphabetically-LATER jar
+     * first; if discovery ever regresses to caller/URL order, this fails by returning the plugins in
+     * the wrong sequence.
+     */
+    @Test
+    void coremodsAreDiscoveredInFilenameOrderNotUrlOrder() throws Exception {
+        Path zJar = jarDir().resolve("z-second.jar");
+        Path aJar = jarDir().resolve("a-first.jar");
+        writeNamedCoremodJar(zJar, "test/pkg/ZPlugin", "test/pkg/ZTransformer");
+        writeNamedCoremodJar(aJar, "test/pkg/APlugin", "test/pkg/ATransformer");
+
+        // URLs added in the "wrong" (z before a) order on purpose.
+        try (LegacyLoader loader = new LegacyLoader(new URL[]{zJar.toUri().toURL(), aJar.toUri().toURL()},
+                LegacyCoremodLoaderTest.class.getClassLoader())) {
+            Class<?> loaderApi = Class.forName("dev.umb.legacy.legacyside.LegacyCoremodLoader", true,
+                    getClass().getClassLoader());
+            java.lang.reflect.Method discover = loaderApi.getDeclaredMethod("discoverAndRegister",
+                    net.minecraft.launchwrapper.LaunchClassLoader.class, java.util.function.Consumer.class);
+            discover.setAccessible(true);
+            java.util.List<String> log = new java.util.ArrayList<String>();
+            @SuppressWarnings("unchecked")
+            List<String> discovered = (List<String>) discover.invoke(null, loader,
+                    (java.util.function.Consumer<String>) log::add);
+
+            assertEquals(java.util.Arrays.asList("test.pkg.APlugin", "test.pkg.ZPlugin"), discovered,
+                    "coremods must scan in filename order (a-first.jar before z-second.jar), "
+                            + "regardless of URL order; log: " + log);
+        }
+    }
+
     @Test
     void jarsWithoutTheManifestAttributeAreIgnored() throws Exception {
         Path jar = jarDir().resolve("plain-mod.jar");
@@ -105,6 +138,72 @@ class LegacyCoremodLoaderTest {
             putClass(jos, "test/pkg/FakePlugin", pluginClassBytes());
             putClass(jos, "test/pkg/FakeTransformer", transformerClassBytes());
         }
+    }
+
+    /** Same shape as {@link #writeCoremodJar(Path)}, but with caller-chosen internal names. */
+    private static void writeNamedCoremodJar(Path jar, String pluginInternalName,
+            String transformerInternalName) throws Exception {
+        Manifest mf = new Manifest();
+        mf.getMainAttributes().put(Attributes.Name.MANIFEST_VERSION, "1.0");
+        mf.getMainAttributes().putValue("FMLCorePlugin", pluginInternalName.replace('/', '.'));
+        try (OutputStream os = Files.newOutputStream(jar);
+             JarOutputStream jos = new JarOutputStream(os, mf)) {
+            putClass(jos, pluginInternalName, namedPluginClassBytes(pluginInternalName, transformerInternalName));
+            putClass(jos, transformerInternalName, namedTransformerClassBytes(transformerInternalName));
+        }
+    }
+
+    /** {@code public FakePlugin() {}  public String[] getASMTransformerClass() { return {transformerInternalName}; } } */
+    private static byte[] namedPluginClassBytes(String pluginInternalName, String transformerInternalName) {
+        ClassWriter cw = new ClassWriter(0);
+        cw.visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC | Opcodes.ACC_SUPER, pluginInternalName, null,
+                "java/lang/Object", null);
+        MethodVisitor init = cw.visitMethod(Opcodes.ACC_PUBLIC, "<init>", "()V", null, null);
+        init.visitCode();
+        init.visitVarInsn(Opcodes.ALOAD, 0);
+        init.visitMethodInsn(Opcodes.INVOKESPECIAL, "java/lang/Object", "<init>", "()V", false);
+        init.visitInsn(Opcodes.RETURN);
+        init.visitMaxs(1, 1);
+        init.visitEnd();
+
+        MethodVisitor m = cw.visitMethod(Opcodes.ACC_PUBLIC, "getASMTransformerClass",
+                "()[Ljava/lang/String;", null, null);
+        m.visitCode();
+        m.visitInsn(Opcodes.ICONST_1);
+        m.visitTypeInsn(Opcodes.ANEWARRAY, "java/lang/String");
+        m.visitInsn(Opcodes.DUP);
+        m.visitInsn(Opcodes.ICONST_0);
+        m.visitLdcInsn(transformerInternalName.replace('/', '.'));
+        m.visitInsn(Opcodes.AASTORE);
+        m.visitInsn(Opcodes.ARETURN);
+        m.visitMaxs(4, 1);
+        m.visitEnd();
+        cw.visitEnd();
+        return cw.toByteArray();
+    }
+
+    /** implements net.minecraft.launchwrapper.IClassTransformer, transform() is a pass-through. */
+    private static byte[] namedTransformerClassBytes(String transformerInternalName) {
+        ClassWriter cw = new ClassWriter(0);
+        cw.visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC | Opcodes.ACC_SUPER, transformerInternalName, null,
+                "java/lang/Object", new String[]{"net/minecraft/launchwrapper/IClassTransformer"});
+        MethodVisitor init = cw.visitMethod(Opcodes.ACC_PUBLIC, "<init>", "()V", null, null);
+        init.visitCode();
+        init.visitVarInsn(Opcodes.ALOAD, 0);
+        init.visitMethodInsn(Opcodes.INVOKESPECIAL, "java/lang/Object", "<init>", "()V", false);
+        init.visitInsn(Opcodes.RETURN);
+        init.visitMaxs(1, 1);
+        init.visitEnd();
+
+        MethodVisitor m = cw.visitMethod(Opcodes.ACC_PUBLIC, "transform",
+                "(Ljava/lang/String;Ljava/lang/String;[B)[B", null, null);
+        m.visitCode();
+        m.visitVarInsn(Opcodes.ALOAD, 3);
+        m.visitInsn(Opcodes.ARETURN);
+        m.visitMaxs(1, 4);
+        m.visitEnd();
+        cw.visitEnd();
+        return cw.toByteArray();
     }
 
     private static void writePlainJar(Path jar) throws Exception {

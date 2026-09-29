@@ -7,6 +7,8 @@ import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.URL;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
 import java.util.function.Consumer;
 import java.util.jar.JarFile;
@@ -54,11 +56,33 @@ final class LegacyCoremodLoader {
      */
     static List<String> discoverAndRegister(LaunchClassLoader lcl, Consumer<String> log) {
         List<String> discovered = new ArrayList<String>();
+        // Real FML's CoreModManager discovers coremods by scanning the mods/coremods directories,
+        // whose listing order is filesystem/alphabetical - not the order addURL happened to be
+        // called in (this project's own boot sequence, unrelated to filename). Modpacks rely on
+        // this: a coremod that must bootstrap before another (a shared Mixin/ASM environment,
+        // e.g.) gets its jar prefixed "!" specifically so it sorts first (mods.json's own
+        // "!mixinbooter-11.17.jar" pool entry exists for exactly that reason). Proven live on the
+        // with jars scanned in caller order instead of filename order, one coremod's own bundled
+        // library initialized before the coremod it depended on had a chance to bootstrap the
+        // shared copy, corrupting a static/singleton the second coremod's own code then failed
+        // against. Sorting by filename before scanning - the same ordering a real mods folder
+        // gives real FML - closes that class of bug here too, before this era has its own
+        // Mixin-bootstrapping coremod pair to trip over it. Universal by construction: sorts by
+        // filename alone, reads no mod id or class name.
+        List<File> sorted = new ArrayList<File>();
         for (URL url : lcl.getURLs()) {
             File jar = toFile(url);
-            if (jar == null || !jar.isFile()) {
-                continue;
+            if (jar != null && jar.isFile()) {
+                sorted.add(jar);
             }
+        }
+        Collections.sort(sorted, new Comparator<File>() {
+            @Override
+            public int compare(File a, File b) {
+                return a.getName().compareToIgnoreCase(b.getName());
+            }
+        });
+        for (File jar : sorted) {
             String pluginClassName = readCoreModPluginAttribute(jar);
             if (pluginClassName == null || pluginClassName.trim().isEmpty()) {
                 continue;

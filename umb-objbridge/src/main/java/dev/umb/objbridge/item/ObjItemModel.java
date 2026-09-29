@@ -32,7 +32,6 @@ import java.util.function.Supplier;
  * A baked OBJ mesh as an {@code ItemModel}. Registered under the client-item type {@code umb:obj} in
  * {@code ItemModels.ID_MAPPER} by {@link ObjBridge#registerItemModelType()}.
  *
- * <p>{@link #update} mirrors {@code CuboidItemModelWrapper.update} exactly (javap-verified): identity
  * element, one new layer, extents, local transform, then the three things
  * {@code ModelRenderProperties.applyToLayer} sets, then the quads.
  */
@@ -90,7 +89,6 @@ public final class ObjItemModel implements ItemModel {
      * contain uppercase letters ({@code models/BombGeneric.obj}) which {@code Identifier.isValidPath}
      * rejects. The OBJ is read straight off the filesystem from the {@code assets=} agent argument,
      * never through the {@code ResourceManager} - {@code ItemModel$BakingContext} carries no
-     * {@code ResourceManager} at all (javap-verified), so there is no other option.
      *
      * <p>{@code texture} IS an {@code Identifier}: it is a sprite name on the block atlas, and the
      * overlay pack copies every model texture to a lowercased path so the name is always valid.
@@ -133,7 +131,6 @@ public final class ObjItemModel implements ItemModel {
             // Block-item-in-slot rule (laneInv-progress.md): a block's own held/inventory geometry is
             // shaped by its in-world (WORLD-path) transform when one resolves, not by the raw OBJ's own
             // (generally unrelated) aspect ratio - see ObjBridge.itemGeometryFit. Every other item keeps
-            // the original plain auto-fit (unchanged from before this lane).
             Fit f = ObjBridge.itemGeometryFit(model, spriteId, fit.orElse(1.0f));
             List<BakedQuad> quads;
             try {
@@ -145,10 +142,21 @@ public final class ObjItemModel implements ItemModel {
             if (quads.isEmpty()) {
                 ObjLog.line("ITEM-BAKE-EMPTY model=" + model + " texture=" + texture);
             }
-            // The wrapper delegates GUI/ground/fixed unchanged and activates the held sidecar only
-            // for first-/third-person contexts. This keeps the existing transform-lane results.
-            return HeldItemModel.wrap(new ObjItemModel(quads, baked,
-                    ObjTransforms.fitGuiToSlot(ObjTransforms.forItem(model, spriteId), quads), transformation));
+            // Live bug (HBM Uzi playtest, round 4/5): isHeldContext (HeldItemRuntime, objbridge)
+            // has actually included GUI/ground/fixed for a while now - held-items-3d.md's own live
+            // check explicitly wants a GUI slot to "show its real captured mesh instead of the
+            // flat/placeholder icon" for items with no recoverable OBJ geometry, which needs
+            // exactly that. This comment describing the OLD, narrower routing was stale; the real
+            // gap it papered over was that the live-capture branch never got OUR OWN per-context
+            // ItemTransform (round 4), nor extents (round 5 - the engine derives its
+            // oversized-icon-viewport decision from the declared extents, not the transform alone;
+            // a live-captured item with no extents at all risked still being clipped to the
+            // STANDARD icon bounds even once correctly scaled) - see
+            // HeldItemModel.wrap(ItemModel, ItemTransforms, Supplier, Matrix4fc)'s own javadoc.
+            Vector3fc[] computedExtents = CuboidItemModelWrapper.computeExtents(quads);
+            ItemTransforms fitted = ObjTransforms.fitGuiToSlot(ObjTransforms.forItem(model, spriteId), quads);
+            return HeldItemModel.wrap(new ObjItemModel(quads, baked, fitted, transformation),
+                    fitted, () -> computedExtents, transformation);
         }
     }
 }

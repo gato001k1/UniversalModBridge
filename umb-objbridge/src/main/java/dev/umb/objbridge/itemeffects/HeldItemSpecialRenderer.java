@@ -28,17 +28,43 @@ final class HeldItemSpecialRenderer implements SpecialModelRenderer<ItemStack> {
         this.context = context; this.partial = partial;
     }
 
+    private static final Set<String> LOGGED_EMPTY = ConcurrentHashMap.newKeySet();
+
     @Override public void submit(ItemStack stack, PoseStack pose, SubmitNodeCollector collector,
                                  int light, int overlay, boolean foil, int seed) {
         String id = net.minecraft.core.registries.BuiltInRegistries.ITEM.getKey(stack.getItem()).toString();
         String key = id + "|" + stack.getDamageValue() + "|" + LegacyItemCaptureClient.renderType(context);
         boolean transformOnly = !WARMED.add(key);
         Object capture = LegacyItemCaptureClient.capture(stack, context, partial, transformOnly);
-        if (capture == null) return;
+        if (capture == null) {
+            // Live bug (HBM Uzi playtest, round 2): "handled=true" (hasCustomRenderer) but no
+            // icon and no legacyside skip/failure log - see LegacyRenderCapture.captureItem's own
+            // new diagnostic for the OTHER end. A null here (bridge not ready, or the reflective
+            // call itself threw) is the one failure mode captureItem can never log, since it
+            // never runs at all in that case.
+            if (LOGGED_EMPTY.add(key + "|null")) {
+                System.out.println("[UMB-OBJBRIDGE] held-item capture returned null key=" + key
+                        + " reason=" + LegacyItemCaptureClient.lastReason());
+            }
+            return;
+        }
         try {
             List<?> draws = (List<?>) field(capture, "draws").get(capture);
+            if (draws.isEmpty() && LOGGED_EMPTY.add(key)) {
+                System.out.println("[UMB-OBJBRIDGE] held-item capture returned zero draws key=" + key
+                        + " transformOnly=" + transformOnly + " - nothing will be drawn this call");
+            }
             for (Object draw : draws) submitDraw(draw, pose, collector, light);
-        } catch (Throwable ignored) { }
+        } catch (Throwable failure) {
+            // Was a bare `catch (Throwable ignored) {}` - any exception here (a bad texture
+            // Identifier, a reflection mismatch, anything inside submitDraw/emit) silently
+            // aborted the WHOLE draw list with zero trace, exactly the shape of bug this session
+            // spent several rounds chasing blind. One line per key/exception-type, not silent.
+            if (LOGGED_EMPTY.add(key + "|" + failure.getClass().getName())) {
+                System.out.println("[UMB-OBJBRIDGE] held-item submitDraw failed key=" + key
+                        + " cause=" + failure.getClass().getName() + ":" + failure.getMessage());
+            }
+        }
     }
 
     @Override public void getExtents(Consumer<Vector3fc> consumer) {

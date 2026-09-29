@@ -98,6 +98,7 @@ public final class LegacyClientInputHook {
         try {
             if (mc == null || mc.player == null || mc.getConnection() == null) return;
             LegacyInputBootstrap.ensure(mc, KEYS);
+            KEYS.syncRebinds(dev.umb.hostagent.content.UmbBridgeHost.get());
             LocalPlayer p = mc.player; Inventory inv = p.getInventory(); ItemStack stack = inv.getSelectedItem();
             StackData s = stackData(stack);
             Vec3 look = p.getLookAngle();
@@ -135,6 +136,14 @@ public final class LegacyClientInputHook {
     public static boolean suppressVanillaAttack() {
         LegacyInputFrame f = last;
         return f != null && !f.heldItemId().isEmpty() && (f.attackDown() || f.attackPressed());
+    }
+
+    /** Test-only: {@link #last} is otherwise only ever set from a live {@link #clientTick}, which
+     *  needs a real {@code Minecraft} instance - same convention as {@code Hooks.setSuppressedElementsForTest}.
+     *  Public (unlike that sibling) because {@link dev.umb.hostagent.LegacyAttackPatcherTest}, the
+     *  only other caller, necessarily lives in a different package from this hook's own tests. */
+    public static void setLastForTest(LegacyInputFrame frame) {
+        last = frame;
     }
 
     private static StackData stackData(ItemStack stack) throws Exception {

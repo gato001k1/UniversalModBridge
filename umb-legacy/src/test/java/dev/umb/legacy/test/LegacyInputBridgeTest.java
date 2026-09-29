@@ -127,6 +127,19 @@ class LegacyInputBridgeTest {
     }
 
     @Test
+    void controlsRebindWritesBackAndUpdatesMirrorCode() {
+        LegacyKeyBindingSynthesis.installFile(
+                Paths.get(System.getProperty("umb.inputPlans")).resolve("testns-input-plans.json"));
+        assertTrue(LegacyKeyBindingRegistry.setCode(LegacyInputTestPlans.ALPHA_ID, 31));
+        assertEquals(31, LegacyKeyBindingRegistry.byId(LegacyInputTestPlans.ALPHA_ID)
+                .func_151463_i());
+        assertEquals(Integer.valueOf(31), LegacyKeyBindingSynthesis.codeFor(
+                LegacyInputTestPlans.ALPHA_ID));
+        assertTrue(LegacyKeyBindingSynthesis.bindingsForCode(31).contains(
+                LegacyKeyBindingRegistry.byId(LegacyInputTestPlans.ALPHA_ID)));
+    }
+
+    @Test
     void planLoaderSkipsMessageClassesInvisibleToThisLoader() {
         // Headless the mod jars are absent, so every HBM plan skips without throwing;
         // in-universe the mod-loader chain (LegacyModClasses) resolves them.

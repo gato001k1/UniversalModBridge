@@ -250,8 +250,15 @@ final class HostWorldImpl implements HostWorld, HostLevel {
         }
     }
 
+    private final Thread serverThread;
+
     HostWorldImpl(ServerLevel level) {
         this.level = level;
+        // Headless unit fixtures intentionally construct a ServerLevel without a MinecraftServer.
+        // Preserve the live-thread guard when a server exists, but do not make harmless facade
+        // construction depend on a non-null server in tests or bootstrap probes.
+        this.serverThread = level == null || level.getServer() == null
+                ? null : level.getServer().getRunningThread();
         synchronized (LEVEL_TWINS) {
             java.util.Map<EntityHandle, UmbLegacyEntity> twins = LEVEL_TWINS.get(level);
             if (twins == null) {
@@ -304,6 +311,9 @@ final class HostWorldImpl implements HostWorld, HostLevel {
      * A loaded chunk returns its current state, which also covers the pad-fill race.
      */
     private BlockState stateIfLoaded(BlockPos pos) {
+        if (this.serverThread != null && Thread.currentThread() != this.serverThread) {
+            return null; // The caller interprets null as minecraft:air.
+        }
         long key = BlockPos.asLong(pos.getX(), pos.getY(), pos.getZ());
         net.minecraft.world.level.chunk.LevelChunk c = level.getChunkSource().getChunkNow(pos.getX() >> 4, pos.getZ() >> 4);
         if (c != null) {

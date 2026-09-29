@@ -175,6 +175,7 @@ public final class LegacyClientTickDispatcher {
                                 : String.valueOf(mcNow.field_71439_g.field_70154_o))
                         + " roots=" + describeRootMinecraft(mcNow));
             }
+            logUavCameraDiagnostic(binding.minecraft, playerName);
             // Real Minecraft posts RenderTickEvent once per frame. While the host drives
             // renderOverlay every frame it posts it there (inside the capture session); when the
             // HUD seam is idle (off, or not riding) this tick keeps it flowing.
@@ -276,6 +277,14 @@ public final class LegacyClientTickDispatcher {
                 final ScaledResolution resolution = new ScaledResolution(binding.minecraft, width, height);
                 final EventBus bus = MinecraftForge.EVENT_BUS;
                 final EventBus fmlBus = FMLCommonHandler.instance().bus();
+                // Bug finding #3 (double crosshair etc.): a legacy mod's cancelled
+                // RenderGameOverlayEvent.Pre (e.g. HBM's gun HUD replacing CROSSHAIRS with its
+                // own) must also suppress the HOST's own vanilla draw of that element, or both
+                // get drawn on top of each other. Collected here (never reassigned, so it stays
+                // capturable by the anonymous Runnables below) and attached to the final Mesh
+                // once, at the very end - a frame where nothing is cancelled (the overwhelming
+                // common case) never allocates anything beyond this one small, empty-at-start set.
+                final java.util.Set<String> canceledElements = new java.util.LinkedHashSet<String>(4);
                 // The host already renders every vanilla HUD element. Still capture each legacy
                 // event type separately: mods commonly attach vehicle HUDs to CROSSHAIRS,
                 // HOTBAR, or another element rather than ALL. LegacyHudPainter filters the
@@ -302,13 +311,19 @@ public final class LegacyClientTickDispatcher {
                     if (type == RenderGameOverlayEvent.ElementType.ALL) continue;
                     final RenderGameOverlayEvent base = new RenderGameOverlayEvent(
                             partialTicks, resolution, 0, 0);
+                    // Built outside the Runnable so its isCanceled() state can be read back
+                    // right after postIsolated (synchronous - every listener has already run by
+                    // the time captureOverlay returns), same object either way.
+                    final RenderGameOverlayEvent.Pre pre = new RenderGameOverlayEvent.Pre(base, type);
                     result = GlEmulationSession.concat(result,
                             LegacyRenderCapture.captureOverlay(binding, new Runnable() {
                                 @Override public void run() {
-                                    postIsolated(bus, new RenderGameOverlayEvent.Pre(base, type),
-                                            binding, name, serverPlayer);
+                                    postIsolated(bus, pre, binding, name, serverPlayer);
                                 }
                             }, true));
+                    if (pre.isCanceled()) {
+                        canceledElements.add(type.name());
+                    }
                     result = GlEmulationSession.concat(result,
                             LegacyRenderCapture.captureOverlay(binding, new Runnable() {
                                 @Override public void run() {
@@ -334,7 +349,8 @@ public final class LegacyClientTickDispatcher {
                                         serverPlayer);
                             }
                         }, true);
-                return GlEmulationSession.concat(result, postAll);
+                return GlEmulationSession.withCanceledElements(
+                        GlEmulationSession.concat(result, postAll), canceledElements);
             } catch (Throwable t) {
                 LegacyInputDiag.log("overlay dispatch failed player=" + playerName + " cause="
                         + t.getClass().getName() + ":" + String.valueOf(t.getMessage()));
@@ -992,6 +1008,81 @@ public final class LegacyClientTickDispatcher {
             // Discovered subscribers alone remain a valid (older) root set.
         }
         return roots;
+    }
+
+    /**
+     * Bounded diagnostic for the MCHeli UAV remote-camera/HUD investigation
+     * live, logs three things about the SAME facade player MCHeli's own client tick code sees:
+     * (1) the class of whatever it rides ({@code field_70154_o}), (2) if that is a UAV station,
+     * its own {@code getControlAircract()} result (is the drone link actually present on this
+     * exact object at client-tick time?), and (3) MCHeli's own unified "aircraft under camera
+     * control" resolution ({@code MCH_EntityAircraft.getAircraft_RiddenOrControl(Entity)},
+     * the real client tick handlers for weapon rotation and mouse-look - never for camera
+     * facade's own {@code Minecraft.field_71462_r} (renderViewEntity's screen-gate sibling): SS K
+     * additionally found {@code onRenderTickPost} skips MCHeli's own vehicle HUD entirely
+     * whenever a non-null, non-GuiChat, non-"GuiDriveableController" screen is set - this line
+     * proves live whether that gate is actually null (as our own code, which never writes this
+     * field, predicts) or something else at HUD-render time.
+     *
+     * <p>Reflection is deliberately scoped to this one mod's known class/method names, matching
+     * the established probe pattern ({@link VehicleProbe}, {@link McheliClientUniverseProbe}):
+     * this is a diagnostic log line, not a production behavioral branch, and every miss (mcheli
+     * absent, not riding, not a station) degrades to a plain descriptive string rather than an
+     * exception - it can never change what the dispatch does, only what gets logged.</p>
+     */
+    /** Unwraps a reflective {@code InvocationTargetException} so diagnostics name the real failure. */
+    private static Throwable rootCause(Throwable t) {
+        return t instanceof java.lang.reflect.InvocationTargetException && t.getCause() != null
+                ? t.getCause() : t;
+    }
+
+    public static void logUavCameraDiagnostic(Minecraft minecraft, String playerName) {
+        if (!LegacyInputDiag.oncePer("uav-camera-diag", 2_000_000_000L)) {
+            return;
+        }
+        try {
+            EntityPlayer player = minecraft.field_71439_g;
+            Object riding = player == null ? null : player.field_70154_o;
+            String ridingClass = riding == null ? "none" : riding.getClass().getName();
+            String controlAircraft;
+            if (riding == null) {
+                controlAircraft = "n/a";
+            } else {
+                try {
+                    java.lang.reflect.Method getControl = riding.getClass().getMethod("getControlAircract");
+                    Object result = getControl.invoke(riding);
+                    controlAircraft = result == null ? "null" : result.getClass().getName();
+                } catch (NoSuchMethodException notAStation) {
+                    controlAircraft = "not-a-station";
+                } catch (Throwable stationCallFailed) {
+                    controlAircraft = "getControlAircract-threw:" + rootCause(stationCallFailed).getClass().getName();
+                }
+            }
+            String riddenOrControl;
+            if (player == null) {
+                riddenOrControl = "n/a";
+            } else {
+                try {
+                    Class<?> aircraftBase = Class.forName("mcheli.aircraft.MCH_EntityAircraft");
+                    java.lang.reflect.Method resolve = aircraftBase.getMethod(
+                            "getAircraft_RiddenOrControl", net.minecraft.entity.Entity.class);
+                    Object result = resolve.invoke(null, player);
+                    riddenOrControl = result == null ? "null" : result.getClass().getName();
+                } catch (ClassNotFoundException mcheliAbsent) {
+                    riddenOrControl = "mcheli-absent";
+                } catch (Throwable resolveFailed) {
+                    riddenOrControl = "getAircraft_RiddenOrControl-threw:"
+                            + rootCause(resolveFailed).getClass().getName();
+                }
+            }
+            LegacyInputDiag.log("uav-camera-diag player=" + playerName
+                    + " riding=" + ridingClass
+                    + " controlAircraft=" + controlAircraft
+                    + " aircraftRiddenOrControl=" + riddenOrControl
+                    + " screen=" + minecraft.field_71462_r);
+        } catch (Throwable ignored) {
+            // Diagnostics must never break the client tick dispatch.
+        }
     }
 
     private static String describeRootMinecraft(Minecraft binding) {

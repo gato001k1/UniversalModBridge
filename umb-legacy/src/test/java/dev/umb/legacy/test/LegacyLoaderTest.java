@@ -24,7 +24,12 @@ import org.objectweb.asm.Opcodes;
 import dev.umb.legacy.boot.LegacyLoader;
 
 /**
- * The delegation policy is the load-bearing part of the , so it is tested against SYNTHETIC jars rather than the real 1.7.10 ones: the test must fail loudly if someone later makes net.minecraft.* parent-first (which would let 26.2's net.minecraft.* leak into...
+ * SYNTHETIC jars rather than the real 1.7.10 ones: the test must fail loudly if someone later makes
+ * net.minecraft.* parent-first (which would let 26.2's net.minecraft.* leak into the legacy
+ * universe) or makes java.* child-first (which the JVM would reject at define time).
+ *
+ * <p>Every loader is closed explicitly, and the synthetic jars live in a fixed scratch dir rather
+ * than a JUnit temp dir - see {@link #jarDir()}.</p>
  */
 class LegacyLoaderTest {
 
@@ -96,7 +101,7 @@ class LegacyLoaderTest {
             assertTrue(child.isParentDelegated("net.minecraft.launchwrapper.LaunchClassLoader"));
             assertTrue(child.isParentDelegated("net.minecraft.launchwrapper.Launch"));
             // the G2 boundary contract (dev.umb.bridge.api) must resolve to the SAME Class objects
-            // on both sides of the 26.2 embedding - see g2-design/DESIGN."THE BOUNDARY CONTRACT"
+            // on both sides of the 26.2 embedding - see g2-design/DESIGN.md "THE BOUNDARY CONTRACT"
             assertTrue(child.isParentDelegated("dev.umb.bridge.api.LegacyBridge"));
             assertTrue(child.isParentDelegated("dev.umb.bridge.api.StackData"));
             assertFalse(child.isParentDelegated("dev.umb.legacy.legacyside.LegacyDriver"));
@@ -146,6 +151,94 @@ class LegacyLoaderTest {
             assertTrue(child.isParentDelegated("org.apache.logging.log4j.Level"));
             assertTrue(child.isParentDelegated("sun.misc.Unsafe"));
             assertTrue(child.isParentDelegated("com.sun.management.OperatingSystemMXBean"));
+        }
+    }
+
+    /**
+     * Proves {@code LegacyLoader.addClassLoaderExclusion}'s fix
+     * calling it must keep the excluded name self-defined by this loader (not parent-delegated -
+     * this loader has to stay the sole definer of its own universe) while still skipping every
+     * registered transformer for that name (the actual protection a real coremod's exclusion call
+     * exists to get). Proven behaviorally with a counting transformer rather than by inspecting
+     * private state: a class under the excluded prefix must load without bumping the transformer's
+     * own counter, while an otherwise-identical class NOT under that prefix must bump it - so this
+     * fails loudly if the override ever regresses to a no-op (wall 4's mistake) or to honoring the
+     * exclusion as real parent delegation (which would break identity for the excluded class).
+     */
+    @Test
+    void addClassLoaderExclusionSkipsTransformationButKeepsSelfDefinition() throws Exception {
+        Path tmp = jarDir();
+        Path jar = tmp.resolve("exclusion-fixture.jar");
+        writeMultiClassJar(jar,
+                "test/pkg/CountingTransformer", countingTransformerBytes(),
+                "test/pkg/excluded/Target", clazz("test/pkg/excluded/Target", 1),
+                "test/pkg/included/Target", clazz("test/pkg/included/Target", 2));
+
+        try (LegacyLoader child = new LegacyLoader(new URL[]{jar.toUri().toURL()},
+                LegacyLoaderTest.class.getClassLoader())) {
+            child.registerTransformer("test.pkg.CountingTransformer");
+            child.addClassLoaderExclusion("test.pkg.excluded.");
+
+            Class<?> excluded = child.loadClass("test.pkg.excluded.Target");
+            assertSame(child, excluded.getClassLoader(),
+                    "the excluded name must still be defined by this loader, not the parent");
+            assertTrue(child.owns("test.pkg.excluded.Target"));
+            assertFalse(child.isParentDelegated("test.pkg.excluded.Target"),
+                    "addClassLoaderExclusion must not add to classLoaderExceptions");
+
+            Class<?> transformerClass = Class.forName("test.pkg.CountingTransformer", true, child);
+            int countAfterExcluded = transformerClass.getField("COUNT").getInt(null);
+            assertEquals(0, countAfterExcluded,
+                    "the excluded class must never reach the registered transformer");
+
+            child.loadClass("test.pkg.included.Target");
+            int countAfterIncluded = transformerClass.getField("COUNT").getInt(null);
+            assertTrue(countAfterIncluded > countAfterExcluded,
+                    "a non-excluded class must still reach the registered transformer "
+                            + "(otherwise this test cannot tell exclusion from a dead transformer)");
+        }
+    }
+
+    /** {@code public static int COUNT;  public byte[] transform(String,String,byte[]) { COUNT++; return arg3; } } */
+    private static byte[] countingTransformerBytes() {
+        ClassWriter cw = new ClassWriter(0);
+        cw.visit(Opcodes.V1_8, Opcodes.ACC_PUBLIC | Opcodes.ACC_SUPER, "test/pkg/CountingTransformer", null,
+                "java/lang/Object", new String[]{"net/minecraft/launchwrapper/IClassTransformer"});
+        cw.visitField(Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC, "COUNT", "I", null, null).visitEnd();
+
+        MethodVisitor init = cw.visitMethod(Opcodes.ACC_PUBLIC, "<init>", "()V", null, null);
+        init.visitCode();
+        init.visitVarInsn(Opcodes.ALOAD, 0);
+        init.visitMethodInsn(Opcodes.INVOKESPECIAL, "java/lang/Object", "<init>", "()V", false);
+        init.visitInsn(Opcodes.RETURN);
+        init.visitMaxs(1, 1);
+        init.visitEnd();
+
+        MethodVisitor m = cw.visitMethod(Opcodes.ACC_PUBLIC, "transform",
+                "(Ljava/lang/String;Ljava/lang/String;[B)[B", null, null);
+        m.visitCode();
+        m.visitFieldInsn(Opcodes.GETSTATIC, "test/pkg/CountingTransformer", "COUNT", "I");
+        m.visitInsn(Opcodes.ICONST_1);
+        m.visitInsn(Opcodes.IADD);
+        m.visitFieldInsn(Opcodes.PUTSTATIC, "test/pkg/CountingTransformer", "COUNT", "I");
+        m.visitVarInsn(Opcodes.ALOAD, 3);
+        m.visitInsn(Opcodes.ARETURN);
+        m.visitMaxs(2, 4);
+        m.visitEnd();
+        cw.visitEnd();
+        return cw.toByteArray();
+    }
+
+    private static void writeMultiClassJar(Path jar, Object... nameAndBytesPairs) throws Exception {
+        try (OutputStream os = Files.newOutputStream(jar);
+             JarOutputStream jos = new JarOutputStream(os)) {
+            for (int i = 0; i < nameAndBytesPairs.length; i += 2) {
+                String internalName = (String) nameAndBytesPairs[i];
+                byte[] bytes = (byte[]) nameAndBytesPairs[i + 1];
+                jos.putNextEntry(new JarEntry(internalName + ".class"));
+                jos.write(bytes);
+                jos.closeEntry();
+            }
         }
     }
 

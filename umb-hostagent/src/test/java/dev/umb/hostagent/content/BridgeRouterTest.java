@@ -186,6 +186,20 @@ class BridgeRouterTest {
         assertEquals(1, era.boots.get());
     }
 
+    /**
+     * Waits for the daemon's failure handling to settle (broken + failed status
+     * recorded) instead of asserting mid-flight: `awaitAttempt` only proves the boot
+     * was ENTERED, while the fallback assertions below are about the RECORDED outcome.
+     */
+    private static void awaitBootFailed(BridgeRouter router) throws Exception {
+        long deadline = System.nanoTime() + 5_000_000_000L;
+        while (!router.isEraBootFailed("testns:block") && System.nanoTime() < deadline) {
+            Thread.sleep(5L);
+        }
+        assertTrue(router.isEraBootFailed("testns:block"),
+                "the failed era boot must settle to failed/disabled within the timeout");
+    }
+
     @Test void routesByNamespaceAfterLazyEraUse() throws Exception {
         Fake def = new Fake("default");
         Fake era = new Fake("era");
@@ -270,6 +284,7 @@ class BridgeRouterTest {
         router.createTile("testns:block", 0, 0, 0);
         awaitAttempt(era);
         assertFalse(era.booted);
+        awaitBootFailed(router);
         assertEquals(0, def.creates.get(), "the initial booting result must not become no-TE/default");
         assertEquals(0, era.creates.get());
         // second call does not retry the boot

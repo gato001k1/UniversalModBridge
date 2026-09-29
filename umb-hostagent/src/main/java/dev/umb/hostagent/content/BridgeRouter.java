@@ -878,6 +878,42 @@ public final class BridgeRouter implements LegacyBridge {
     }
 
     @Override
+    public java.util.List<dev.umb.bridge.api.LegacyBridge.KeyBindingData> keyBindings() {
+        java.util.List<dev.umb.bridge.api.LegacyBridge.KeyBindingData> out =
+                new java.util.ArrayList<>();
+        try {
+            java.util.List<dev.umb.bridge.api.LegacyBridge.KeyBindingData> mine =
+                    defaultBridge.keyBindings();
+            if (mine != null) out.addAll(mine);
+        } catch (Throwable t) { AgentLog.error("BridgeRouter.keyBindings(default)", t, 2); }
+        synchronized (this) {
+            for (EraHolder holder : eras.values()) {
+                if (holder.bridge == null) continue;
+                try {
+                    java.util.List<dev.umb.bridge.api.LegacyBridge.KeyBindingData> mine =
+                            holder.bridge.keyBindings();
+                    if (mine != null) out.addAll(mine);
+                } catch (Throwable t) { AgentLog.error("BridgeRouter.keyBindings(era)", t, 2); }
+            }
+        }
+        return out;
+    }
+
+    @Override
+    public boolean setKeyBinding(String stableId, int legacyCode) {
+        try { if (defaultBridge.setKeyBinding(stableId, legacyCode)) return true; }
+        catch (Throwable t) { AgentLog.error("BridgeRouter.setKeyBinding(default)", t, 2); }
+        synchronized (this) {
+            for (EraHolder holder : eras.values()) {
+                if (holder.bridge == null) continue;
+                try { if (holder.bridge.setKeyBinding(stableId, legacyCode)) return true; }
+                catch (Throwable t) { AgentLog.error("BridgeRouter.setKeyBinding(era)", t, 2); }
+            }
+        }
+        return false;
+    }
+
+    @Override
     public java.util.List<EffectData> drainClientEffects() {
         java.util.List<EffectData> out = new java.util.ArrayList<>();
         try {

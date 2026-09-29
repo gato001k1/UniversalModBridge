@@ -37,6 +37,8 @@ import dev.umb.bridge.api.StackData;
 import dev.umb.bridge.api.TileHandle;
 import dev.umb.legacy.legacyside.input.LegacyInputDispatcher;
 import dev.umb.legacy.legacyside.input.LegacyInputRecord;
+import dev.umb.legacy.legacyside.input.LegacyKeyBindingRegistry;
+import dev.umb.legacy.legacyside.input.LegacyKeyBindingSynthesis;
 import dev.umb.legacy.legacyside.network.LegacyEffectPacketDecoder;
 import dev.umb.legacy.legacyside.network.LegacyNetworkLoopback;
 import cpw.mods.fml.common.network.simpleimpl.IMessage;
@@ -410,6 +412,27 @@ public final class LegacyBridgeImpl implements LegacyBridge {
             if (umbWorld != null) umbWorld.host().log("LegacyBridgeImpl.acceptInput failed: " + t);
             return false;
         }
+    }
+
+    @Override
+    public List<dev.umb.bridge.api.LegacyBridge.KeyBindingData> keyBindings() {
+        ensureBooted();
+        LegacyKeyBindingSynthesis.ensureSynthesized();
+        List<dev.umb.bridge.api.LegacyBridge.KeyBindingData> out =
+                new ArrayList<dev.umb.bridge.api.LegacyBridge.KeyBindingData>();
+        for (Map.Entry<net.minecraft.client.settings.KeyBinding, String> e
+                : LegacyKeyBindingRegistry.snapshot().entrySet()) {
+            net.minecraft.client.settings.KeyBinding b = e.getKey();
+            out.add(new dev.umb.bridge.api.LegacyBridge.KeyBindingData(e.getValue(),
+                    b.func_151464_g(), b.func_151466_e(),
+                    LegacyKeyBindingRegistry.namespace(b), b.func_151463_i()));
+        }
+        return out;
+    }
+
+    @Override
+    public boolean setKeyBinding(String stableId, int legacyCode) {
+        return LegacyKeyBindingRegistry.setCode(stableId, legacyCode);
     }
 
     @Override

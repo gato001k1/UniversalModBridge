@@ -120,6 +120,14 @@ public final class LegacyEntityRenderCapture1165Client {
                     "1165-renderer-missing:" + entity.getClass().getName());
         }
         String texture = texture(renderer, entity);
+        syncRenderPartialTicks(partialTick);
+        // A real frame installs the camera (cacheActiveRenderInfo) before any entity renders;
+        // renderers ask the manager for the camera distance (EntityRenderer.renderName ->
+        // squareDistanceTo -> info.getProjectedView).
+        if (current.field_217783_c == null) {
+            current.field_217783_c = new net.minecraft.client.renderer.ActiveRenderInfo();
+        }
+        placeCaptureCamera(current.field_217783_c, entity, partialTick);
         MatrixStack stack = new MatrixStack();
         RecordingBuffer buffer = new RecordingBuffer(stack, texture);
         // Reproduce only the geometry preamble from EntityRendererManager: apply the
@@ -144,6 +152,57 @@ public final class LegacyEntityRenderCapture1165Client {
         return new EntityRenderCapture(entity.getClass().getName(),
                 "1165-renderer:" + renderer.getClass().getName(), true,
                 buffer.matrixOps, buffer.pushes, buffer.pops, draws);
+    }
+
+    /** Vanilla's name-tag range is 64 blocks (32 sneaking); the capture camera sits twice that away. */
+    static final double CAPTURE_CAMERA_DISTANCE = 128.0D;
+
+    /**
+     * Puts the capture camera {@link #CAPTURE_CAMERA_DISTANCE} straight above the captured entity.
+     * A capture is camera-independent (cached, shared by every viewer) and name tags are drawn
+     * by the host, so the distance-gated name-tag branch must never run here: within range,
+     * LivingRenderer.canRenderName goes on to read Minecraft.player, which this headless
+     * client does not have (live: an unpositioned camera sits at the world origin, so every
+     * mob within 64 blocks of (0,0,0) NPE'd there and captured nothing, while mobs farther away
+     * rendered). Relative to the entity, the result no longer depends on where it stands.
+     * Uses the protected setPosition (func_216775_b), which also keeps the block position.
+     */
+    static void placeCaptureCamera(net.minecraft.client.renderer.ActiveRenderInfo info, Entity entity,
+            float partialTick) {
+        if (info == null || entity == null) return;
+        try {
+            double p = Float.isFinite(partialTick) ? Math.max(0.0D, Math.min(1.0D, partialTick)) : 1.0D;
+            double x = entity.field_70169_q + (entity.func_226277_ct_() - entity.field_70169_q) * p;
+            double y = entity.field_70167_r + (entity.func_226278_cu_() - entity.field_70167_r) * p;
+            double z = entity.field_70166_s + (entity.func_226281_cx_() - entity.field_70166_s) * p;
+            java.lang.reflect.Method setPosition = net.minecraft.client.renderer.ActiveRenderInfo.class
+                    .getDeclaredMethod("func_216775_b", double.class, double.class, double.class);
+            setPosition.setAccessible(true);
+            setPosition.invoke(info, x, y + CAPTURE_CAMERA_DISTANCE, z);
+        } catch (Throwable ignored) {
+            // Mapping mismatch: the camera keeps its previous position (renderers still run).
+        }
+    }
+
+    /**
+     * A real frame renders with Minecraft's timer at the frame's partial tick, and models read
+     * it back (Minecraft.getRenderPartialTicks) to interpolate animations. Keep the facade timer
+     * equal to the capture's partial tick. Best effort: no instance or no timer leaves it alone.
+     */
+    static void syncRenderPartialTicks(float partialTick) {
+        try {
+            Minecraft minecraft = Minecraft.func_71410_x();
+            if (minecraft == null) return;
+            java.lang.reflect.Field timerField = Minecraft.class.getDeclaredField("field_71428_T");
+            timerField.setAccessible(true);
+            Object timer = timerField.get(minecraft);
+            if (timer instanceof net.minecraft.util.Timer) {
+                ((net.minecraft.util.Timer) timer).field_194147_b =
+                        Float.isFinite(partialTick) ? partialTick : 0.0F;
+            }
+        } catch (Throwable ignored) {
+            // A mapping without the timer field keeps whatever the facade holds.
+        }
     }
 
     private static String texture(EntityRenderer<?> renderer, Entity entity) {
@@ -282,10 +341,61 @@ public final class LegacyEntityRenderCapture1165Client {
                 if (segment.values.isEmpty()) continue;
                 float[] data = new float[segment.values.size()];
                 for (int i = 0; i < data.length; i++) data[i] = segment.values.get(i);
-                result.add(EntityRenderCapture.Draw.owned(texture, data, data.length / 8,
-                        segment.matrix));
+                // 1.16 writers hand the builder vertices the MatrixStack has ALREADY
+                // transformed (ModelRenderer transforms each vertex and normal itself;
+                // IVertexBuilder.pos(Matrix4f, ...) transforms before pos(double)). The
+                // capture starts from an identity stack, so the data is final entity/block
+                // space: ship an identity matrix, or the host would transform posed parts twice.
+                addDraws(result, texture, data);
             }
             return result;
+        }
+
+        /** Emits {@code data}, splitting atlas-bound quads into per-sprite draws. */
+        static void addDraws(List<EntityRenderCapture.Draw> out, String texture, float[] data) {
+            if (!HeadlessAtlas1165.isHeadlessAtlas(texture)) {
+                out.add(EntityRenderCapture.Draw.owned(texture, data, data.length / 8, null));
+                return;
+            }
+            // UVs index the headless atlas sheet, which exists only inside this universe:
+            // re-express each quad against its sprite's own PNG with 0..1 UVs.
+            Map<String, List<Float>> bySprite = new LinkedHashMap<String, List<Float>>();
+            int vertices = data.length / 8;
+            int group = vertices % 4 == 0 ? 4 : 1;
+            for (int first = 0; first + group <= vertices; first += group) {
+                float cu = 0f, cv = 0f;
+                for (int k = 0; k < group; k++) {
+                    cu += data[(first + k) * 8 + 3];
+                    cv += data[(first + k) * 8 + 4];
+                }
+                cu /= group;
+                cv /= group;
+                Object[] probe = HeadlessAtlas1165.spriteUv(texture, cu, cv, cu, cv);
+                String target = probe == null ? texture : (String) probe[0];
+                List<Float> values = bySprite.get(target);
+                if (values == null) {
+                    values = new ArrayList<Float>();
+                    bySprite.put(target, values);
+                }
+                for (int k = 0; k < group; k++) {
+                    int at = (first + k) * 8;
+                    float u = data[at + 3], v = data[at + 4];
+                    if (probe != null) {
+                        Object[] local = HeadlessAtlas1165.spriteUv(texture, cu, cv, u, v);
+                        u = ((Float) local[1]).floatValue();
+                        v = ((Float) local[2]).floatValue();
+                    }
+                    for (int j = 0; j < 8; j++) {
+                        values.add(j == 3 ? u : j == 4 ? v : data[at + j]);
+                    }
+                }
+            }
+            for (Map.Entry<String, List<Float>> entry : bySprite.entrySet()) {
+                List<Float> values = entry.getValue();
+                float[] split = new float[values.size()];
+                for (int i = 0; i < split.length; i++) split[i] = values.get(i);
+                out.add(EntityRenderCapture.Draw.owned(entry.getKey(), split, split.length / 8, null));
+            }
         }
 
         private static float[] matrix(MatrixStack stack) {

@@ -393,6 +393,18 @@ public final class UmbUniverse implements LegacyBridge {
     }
 
     @Override
+    public java.util.List<dev.umb.bridge.api.LegacyBridge.KeyBindingData> keyBindings() {
+        LegacyBridge r = real;
+        return r == null ? java.util.Collections.emptyList() : r.keyBindings();
+    }
+
+    @Override
+    public boolean setKeyBinding(String stableId, int legacyCode) {
+        LegacyBridge r = real;
+        return r != null && r.setKeyBinding(stableId, legacyCode);
+    }
+
+    @Override
     public java.util.List<dev.umb.bridge.api.EffectData> drainClientEffects() {
         LegacyBridge r = real;
         if (r == null) {

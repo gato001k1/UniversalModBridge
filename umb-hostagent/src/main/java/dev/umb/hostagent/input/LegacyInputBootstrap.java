@@ -5,6 +5,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.mojang.blaze3d.platform.InputConstants;
+import dev.umb.bridge.api.LegacyBridge;
 import dev.umb.hostagent.AgentLog;
 import net.minecraft.client.KeyMapping;
 import net.minecraft.client.Minecraft;
@@ -54,22 +55,55 @@ public final class LegacyInputBootstrap {
             if (done) return;
             try {
                 Path dir = plansDir();
-                List<Twin> twins = collectTwins(dir);
+                List<Twin> twins = collectBridgeTwins();
+                if (twins.isEmpty()) twins = collectTwins(dir);
                 for (Twin twin : twins) {
                     keys.register(twin.namespace(), twin.stableId(), twin.translationKey(),
                             twin.type(), twin.defaultCode());
                 }
                 appendToOptions(mc, keys);
+                // Options.load ran before these late-discovered mappings existed. Reload once
+                // after appending so existing options.txt values win over legacy defaults.
+                if (!twins.isEmpty() && mc != null && mc.options != null) mc.options.load();
                 Map<String, Integer> perNs = new LinkedHashMap<>();
                 for (Twin twin : twins) {
                     perNs.merge(twin.namespace(), 1, Integer::sum);
                 }
                 LegacyInputDiag.loud("twins registered: " + twins.size()
                         + " (plans dir " + dir.toAbsolutePath() + "): " + perNs);
+                LegacyInputDiag.loud("registered " + keys.mappings().size()
+                        + " legacy key mappings in " + perNs.size() + " categories");
             } catch (Throwable t) {
                 AgentLog.error("LegacyInputBootstrap.ensure", t, 2);
             }
             done = true;
+        }
+    }
+
+    private static List<Twin> collectBridgeTwins() {
+        LegacyBridge bridge = dev.umb.hostagent.content.UmbBridgeHost.get();
+        if (bridge == null) return java.util.Collections.emptyList();
+        try {
+            List<Twin> out = new ArrayList<>();
+            List<LegacyBridge.KeyBindingData> data = bridge.keyBindings();
+            if (data == null) return out;
+            for (LegacyBridge.KeyBindingData b : data) {
+                if (b == null || b.stableId == null || b.description == null) continue;
+                int code = b.defaultCode;
+                if (code < 0) {
+                    out.add(new Twin(b.namespace, b.stableId, b.description,
+                            InputConstants.Type.MOUSE, code + 100));
+                } else {
+                    try {
+                        out.add(new Twin(b.namespace, b.stableId, b.description,
+                                InputConstants.Type.KEYSYM, Lwjgl2ToGlfw.keyboardToGlfw(code)));
+                    } catch (IllegalArgumentException ignored) { }
+                }
+            }
+            return out;
+        } catch (Throwable t) {
+            AgentLog.error("LegacyInputBootstrap.collectBridgeTwins", t, 1);
+            return java.util.Collections.emptyList();
         }
     }
 
@@ -78,7 +112,6 @@ public final class LegacyInputBootstrap {
         if (configured != null && !configured.isBlank()) {
             return Paths.get(configured);
         }
-        // The snapshot lives next to the plans (research/out/legacy/<ns>-snapshot.json):
         // derive from its location instead of the process working directory.
         try {
             java.nio.file.Path snapshot = dev.umb.hostagent.HostAgent.snapshotPath();

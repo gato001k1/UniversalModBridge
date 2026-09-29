@@ -58,15 +58,37 @@ public final class LegacyEntityCapture1165 {
             return EntityRenderCapture.empty(className,
                     "1165-capture-provider-returned-null:" + safe(entityId));
         } catch (Throwable failure) {
-            String reason = failure.getClass().getName();
+            String reason = describe(failure);
             if (!reason.equals(lastFailure)) {
                 lastFailure = reason;
+                // Once per distinct cause, with the frames that locate it: a bare class name
+                // ("NoSuchMethodError") does not say which member is missing or who called it.
                 System.err.println("[UMB-ENTITY-1165] capture failed class=" + className
-                        + " reason=" + reason);
+                        + " reason=" + reason + " at " + frames(failure, 8));
             }
             return EntityRenderCapture.empty(className,
                     "1165-capture-provider-threw:" + reason);
         }
+    }
+
+    /** Deepest cause as {@code Class: message} (the message names e.g. the missing method). */
+    static String describe(Throwable failure) {
+        Throwable root = failure;
+        while (root.getCause() != null && root.getCause() != root) root = root.getCause();
+        String message = root.getMessage();
+        return root.getClass().getName() + (message == null || message.isEmpty() ? "" : ": " + message);
+    }
+
+    static String frames(Throwable failure, int max) {
+        Throwable root = failure;
+        while (root.getCause() != null && root.getCause() != root) root = root.getCause();
+        StackTraceElement[] stack = root.getStackTrace();
+        StringBuilder out = new StringBuilder();
+        for (int i = 0; i < stack.length && i < max; i++) {
+            if (i > 0) out.append(" <- ");
+            out.append(stack[i]);
+        }
+        return out.toString();
     }
 
     private static String safe(String value) {

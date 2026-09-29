@@ -52,6 +52,13 @@ class Lwjgl2ToGlfwTest {
         assertThrows(IllegalArgumentException.class, () -> Lwjgl2ToGlfw.keyboardToGlfw(256));
     }
 
+    @Test void reverseTableRoundTripsRepresentativeKeys() {
+        assertEquals(19, Lwjgl2ToGlfw.glfwToKeyboard(82));
+        assertEquals(17, Lwjgl2ToGlfw.glfwToKeyboard(87));
+        assertEquals(200, Lwjgl2ToGlfw.glfwToKeyboard(265));
+        assertThrows(IllegalArgumentException.class, () -> Lwjgl2ToGlfw.glfwToKeyboard(999));
+    }
+
     @Test void everyPlanCodeResolves() throws Exception {
         java.nio.file.Path dir = java.nio.file.Paths.get("research/out/legacy");
         int checked = 0;

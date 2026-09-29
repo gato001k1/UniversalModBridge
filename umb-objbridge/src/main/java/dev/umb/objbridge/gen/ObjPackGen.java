@@ -151,6 +151,13 @@ public final class ObjPackGen {
         List<Def> defs = new ArrayList<>();
         List<HeldOnlyRow> heldOnlyRows = new ArrayList<>();
         Map<String, RenderMap.Asset> texturesToCopy = new LinkedHashMap<>();   // spriteId -> asset
+        // Bug (HBM Uzi invisible, no GUI icon or held render): every `Def`/`BlockEntry` below
+        // writes a "model": "<ns>:models/.../foo.obj" reference into the generated item JSON, but
+        // NOTHING ever copied the referenced .obj file itself into the output pack - only its
+        // texture was. 26.2 then fails to resolve that model (the file plain does not exist in the
+        // generated pack), so the item renders as nothing at all. path -> asset, same shape as
+        // texturesToCopy, so the same copy loop idiom applies to both.
+        Map<String, RenderMap.Asset> modelsToCopy = new LinkedHashMap<>();
         Map<String, Integer> reasonCounts = new TreeMap<>();
         Map<String, Integer> skipCounts = new TreeMap<>();
         List<String> skipDetail = new ArrayList<>();
@@ -192,6 +199,7 @@ public final class ObjPackGen {
             }
             if (!emittedPaths.add(packPath)) { bump(skipCounts, "duplicate-pack-path"); continue; }
             texturesToCopy.putIfAbsent(sprite, pick.texture());
+            modelsToCopy.putIfAbsent(pick.model().path(), pick.model());
             bump(reasonCounts, pick.reason().name());
             defs.add(new Def(id, packPath, pick.model().path(), sprite, pick.reason().name(), tris,
                     row.groups().size(), snap.blockIds.contains(id), row.rendererClass()));
@@ -236,6 +244,7 @@ public final class ObjPackGen {
             if (tris <= 0) { bump(blockSkip, "obj-unparseable"); continue; }
             String sprite = pick.spriteId();
             texturesToCopy.putIfAbsent(sprite, pick.texture());
+            modelsToCopy.putIfAbsent(pick.model().path(), pick.model());
             blocks.add(new BlockEntry(id, pick.model().path(), sprite,
                     pick.reason().name() + "/" + texSource, tris));
 
@@ -383,6 +392,36 @@ public final class ObjPackGen {
             }
         }
 
+        // Bug (HBM Uzi invisible, no GUI icon or held render - see modelsToCopy's own comment
+        // above): the item/block JSON already written above references each row's `.obj` model by
+        // path, but until now nothing ever copied the file itself - only its texture, in the loop
+        // just above, ever reached the output pack. Same idiom, `.bare()` already carries the
+        // extension (unlike a sprite id, which needs ".png" appended), so no `rel`/suffix dance is
+        // needed here.
+        int modelsCopied = 0, modelsCopyFailed = 0;
+        long modelBytesCopied = 0;
+        List<String> modelCopyErrors = new ArrayList<>();
+        for (Map.Entry<String, RenderMap.Asset> e : modelsToCopy.entrySet()) {
+            RenderMap.Asset asset = e.getValue();
+            Path src = assetsRoot.resolve(asset.assetPath() != null ? asset.assetPath()
+                    : "assets/" + asset.namespace() + "/" + asset.bare());
+            Path dst = workDir.resolve("assets/" + ns + "/" + asset.bare());
+            try {
+                if (!Files.isRegularFile(src)) {
+                    modelsCopyFailed++;
+                    if (modelCopyErrors.size() < 20) modelCopyErrors.add("missing source " + src);
+                    continue;
+                }
+                Files.createDirectories(dst.getParent());
+                Files.copy(src, dst, StandardCopyOption.REPLACE_EXISTING);
+                modelsCopied++;
+                modelBytesCopied += Files.size(dst);
+            } catch (IOException io) {
+                modelsCopyFailed++;
+                if (modelCopyErrors.size() < 20) modelCopyErrors.add(src + " -> " + dst + " : " + io);
+            }
+        }
+
         int oversizedCount = 0;
         Map<String, Integer> oversizedSkipReason = new TreeMap<>();
         for (Def d : defs) {
@@ -465,6 +504,9 @@ public final class ObjPackGen {
         r.append("| distinct textures copied | ").append(copied).append(" |\n");
         r.append("| texture copy failures | ").append(copyFailed).append(" |\n");
         r.append("| copied texture bytes | ").append(copiedBytes).append(" |\n");
+        r.append("| distinct `.obj` models copied | ").append(modelsCopied).append(" |\n");
+        r.append("| model copy failures | ").append(modelsCopyFailed).append(" |\n");
+        r.append("| copied model bytes | ").append(modelBytesCopied).append(" |\n");
         r.append("| atlas directory sources added | ").append(spriteDirs).append(" |\n");
         r.append("| triangles behind the item defs | ").append(defs.stream().mapToInt(Def::triangles).sum()).append(" |\n");
         r.append("| triangles behind the block splices | ").append(blocks.stream().mapToInt(BlockEntry::triangles).sum()).append(" |\n");
@@ -522,6 +564,10 @@ public final class ObjPackGen {
             r.append("\n## Texture copy errors\n\n");
             for (String s : copyErrors) r.append("- `").append(s).append("`\n");
         }
+        if (!modelCopyErrors.isEmpty()) {
+            r.append("\n## Model copy errors\n\n");
+            for (String s : modelCopyErrors) r.append("- `").append(s).append("`\n");
+        }
         if (!baseMissingSample.isEmpty()) {
             r.append("\n## Item defs with no base-pack counterpart\n\n");
             r.append("These would NOT override anything - the id sanitizer disagreed with PackGen's:\n\n");
@@ -573,6 +619,7 @@ public final class ObjPackGen {
                 + " unattributed)");
         System.out.println("blocks      : " + blocks.size());
         System.out.println("textures    : " + copied + " copied, " + copyFailed + " failed");
+        System.out.println("models      : " + modelsCopied + " copied, " + modelsCopyFailed + " failed");
         System.out.println("reasons     : " + reasonCounts);
         System.out.println("skips       : " + skipCounts);
         System.out.println("block skips : " + blockSkip);

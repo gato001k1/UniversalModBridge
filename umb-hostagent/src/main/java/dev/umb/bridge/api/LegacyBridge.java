@@ -2,6 +2,16 @@ package dev.umb.bridge.api;
 
 /** The legacy universe, implemented INSIDE the LegacyLoader; the single entry point. */
 public interface LegacyBridge {
+    /** Plain legacy key metadata; no era/client classes cross the bridge boundary. */
+    final class KeyBindingData {
+        public final String stableId, description, category, namespace;
+        public final int defaultCode;
+        public KeyBindingData(String stableId, String description, String category,
+                              String namespace, int defaultCode) {
+            this.stableId = stableId; this.description = description; this.category = category;
+            this.namespace = namespace; this.defaultCode = defaultCode;
+        }
+    }
     /** Host-independent snapshot of the legacy render camera. */
     final class CameraState {
         public final boolean overridden;
@@ -369,6 +379,14 @@ public interface LegacyBridge {
 
     /** Host client input; default keeps older eras/fakes source-compatible. */
     default boolean acceptInput(HostPlayer player, InputData input) { return false; }
+
+    /** Enumerates legacy client key bindings after era boot. */
+    default java.util.List<KeyBindingData> keyBindings() {
+        return java.util.Collections.emptyList();
+    }
+
+    /** Writes one legacy key code back to the legacy KeyBinding. */
+    default boolean setKeyBinding(String stableId, int legacyCode) { return false; }
 
     /** Server-to-client effects drained after the legacy server tick. */
     default java.util.List<EffectData> drainClientEffects() {

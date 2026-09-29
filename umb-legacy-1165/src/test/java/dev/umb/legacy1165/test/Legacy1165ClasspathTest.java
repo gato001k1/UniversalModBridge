@@ -84,4 +84,24 @@ class Legacy1165ClasspathTest {
         assertTrue(Legacy1165Classpath.hasJarNamed(List.of(f), "forge"));
         assertEquals(false, Legacy1165Classpath.hasJarNamed(List.of(f), "launchwrapper"));
     }
+
+    @Test
+    void clientDistPutsClientOverlayAndClientJarAheadOfServerJars() throws IOException {
+        Path dir = Files.createTempDirectory("umb-1165-dist");
+        File serverPatched = Files.createFile(dir.resolve("mc-server-srg-patched-at.jar")).toFile();
+        File server = Files.createFile(dir.resolve("mc-server-srg-at.jar")).toFile();
+        File client = Files.createFile(dir.resolve("mc-client-srg-at.jar")).toFile();
+        File gson = Files.createFile(dir.resolve("gson-2.8.0.jar")).toFile();
+        List<File> manifest = List.of(serverPatched, server, client, gson);
+
+        // Without the client overlay the unpatched client jar must not move (Forge patches).
+        assertEquals(manifest, Legacy1165Classpath.forDist(manifest, "CLIENT"));
+
+        File clientPatched = Files.createFile(dir.resolve("mc-client-srg-patched-at.jar")).toFile();
+        List<File> ordered = Legacy1165Classpath.forDist(manifest, "CLIENT");
+        assertEquals(List.of(clientPatched.getAbsoluteFile(), client, serverPatched, server, gson), ordered);
+        // Any other dist keeps the dedicated-server composition untouched.
+        assertEquals(manifest, Legacy1165Classpath.forDist(manifest, "DEDICATED_SERVER"));
+        assertEquals(manifest, Legacy1165Classpath.forDist(manifest, null));
+    }
 }

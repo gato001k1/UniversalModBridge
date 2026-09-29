@@ -234,4 +234,18 @@ public final class Lwjgl2ToGlfw {
             default: throw new IllegalArgumentException("no GLFW mapping for LWJGL2 code " + lwjglCode);
         }
     }
+
+    /** Reverse of {@link #keyboardToGlfw(int)}; unknown GLFW tokens are not guessed. */
+    public static int glfwToKeyboard(int glfwCode) {
+        for (int legacy = 0; legacy <= 255; legacy++) {
+            try {
+                if (keyboardToGlfw(legacy) == glfwCode) return legacy;
+            } catch (IllegalArgumentException ignored) { }
+        }
+        for (int legacy : new int[] {156, 157, 181, 184, 199, 200, 201, 203, 205,
+                207, 208, 209, 210, 211, 219, 220, 221}) {
+            if (keyboardToGlfw(legacy) == glfwCode) return legacy;
+        }
+        throw new IllegalArgumentException("no LWJGL2 mapping for GLFW code " + glfwCode);
+    }
 }
