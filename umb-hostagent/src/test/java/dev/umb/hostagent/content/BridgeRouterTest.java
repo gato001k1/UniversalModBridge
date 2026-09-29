@@ -31,6 +31,8 @@ class BridgeRouterTest {
         final AtomicInteger shutdowns = new AtomicInteger();
         volatile boolean booted;
         RuntimeException failOnBoot;
+        /** When set, boot waits for it before failing, so a test can act while the boot is in flight. */
+        volatile CountDownLatch holdBootFailure;
 
         Fake(String name) {
             this.name = name;
@@ -39,7 +41,17 @@ class BridgeRouterTest {
         @Override
         public void boot(HostWorld world) {
             boots.incrementAndGet();
-            if (failOnBoot != null) throw failOnBoot;
+            if (failOnBoot != null) {
+                CountDownLatch hold = holdBootFailure;
+                if (hold != null) {
+                    try {
+                        hold.await(10, java.util.concurrent.TimeUnit.SECONDS);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+                throw failOnBoot;
+            }
             booted = true;
         }
 
@@ -279,9 +291,13 @@ class BridgeRouterTest {
         Fake def = new Fake("default");
         Fake era = new Fake("era");
         era.failOnBoot = new RuntimeException("boom");
+        // Hold the failure until the first call has routed: otherwise a fast failing boot can
+        // finish first and that call legitimately falls back to the default (a test race).
+        era.holdBootFailure = new CountDownLatch(1);
         BridgeRouter router = routerWithEra(def, era);
         router.boot(new FakeWorld());
         router.createTile("testns:block", 0, 0, 0);
+        era.holdBootFailure.countDown();
         awaitAttempt(era);
         assertFalse(era.booted);
         awaitBootFailed(router);
