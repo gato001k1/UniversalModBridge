@@ -17,8 +17,13 @@ import dev.umb.bridge.api.EntityRenderCapture;
 import dev.umb.legacy.legacyside.render.LegacyRenderCapture;
 
 /**
- * {@code dev.umb.bridge.api.EntityHandle} over a raw legacy {@code Entity} .
- * Twin of {@link TileHandleImpl}; NBT crosses as {@code byte[]} via legacy {@code CompressedStreamTools}, exactly like the tile-entity bridge.
+ * {@code dev.umb.bridge.api.EntityHandle} over a raw legacy {@code Entity} (ENTITY-BRIDGE
+ * milestone 1/2/3). Twin of {@link TileHandleImpl}; NBT crosses as {@code byte[]} via legacy
+ * {@code CompressedStreamTools}, exactly like the tile-entity bridge.
+ *
+ * <p>Crash isolation (same discipline as {@link TileHandleImpl}): the first throw from
+ * {@link #tick()} POISONS this one handle - ticking stops for it forever, nothing propagates to
+ * the caller.</p>
  */
 public final class EntityHandleImpl implements EntityHandle {
 
@@ -243,9 +248,12 @@ public final class EntityHandleImpl implements EntityHandle {
     private static final double MAX_COLLISION_BOX_SPAN = 128.0D;
 
     /**
- * Extra world-space collision boxes beyond {@link #getBoundingBox}, found by type only.
- * (a) the vanilla multipart contract {@code func_70021_al} , each part's {@code func_70046_E}; (b) helper-owned world-space {@code AxisAlignedBB} state kept on the entity...
- */
+     * Extra world-space collision boxes beyond {@link #getBoundingBox}, found by type only.
+     * 1.7.10 SRG runtime: "the Entity parts making up this Entity"), each part's
+     * {@code func_70046_E}; (b) helper-owned world-space {@code AxisAlignedBB} state kept on the
+     * entity or one level deep in a helper object/array/list.  Never names a mod class or field.
+     * Null when nothing extra is known.  Never throws.
+     */
     @Override
     public java.util.List<double[]> getCollisionBoxes() {
         try {
@@ -277,7 +285,6 @@ public final class EntityHandleImpl implements EntityHandle {
             try {
                 AxisAlignedBB box = part.func_70046_E();
                 if (box == null) {
-                    // The 1.7.10 base Entity.func_70046_E answers null (
                     // aconst_null/areturn); only overrides expose a box through it. Fall back
                     // to the part's own field_70121_D (boundingBox), which setPosition keeps
                     // current for every entity whether it overrides the accessor or not.
@@ -517,7 +524,6 @@ public final class EntityHandleImpl implements EntityHandle {
                 // The client facade scope temporarily swaps entity worlds to its isRemote view
                 // while legacy client handlers run. A host rider cannot be resolved during that
                 // window, and treating it as "no rider" dismounted the pilot every few ticks
-                // (: MCHeli's client tick saw ridingEntity=null, no controls)
                 return;
             }
             if (player != null) {
@@ -648,6 +654,16 @@ public final class EntityHandleImpl implements EntityHandle {
     public EntityRenderCapture renderCapture(float partialTick) {
         try {
             return LegacyRenderCapture.capture(entity, partialTick);
+        } catch (Throwable t) {
+            System.err.println("[UMB-ENTITY] render capture failed for " + entity.getClass().getName() + ": " + t);
+            return EntityRenderCapture.empty(entity.getClass().getName(), legacyEntityId());
+        }
+    }
+
+    @Override
+    public EntityRenderCapture renderCapture(float partialTick, int riderCameraMode) {
+        try {
+            return LegacyRenderCapture.capture(entity, partialTick, riderCameraMode);
         } catch (Throwable t) {
             System.err.println("[UMB-ENTITY] render capture failed for " + entity.getClass().getName() + ": " + t);
             return EntityRenderCapture.empty(entity.getClass().getName(), legacyEntityId());

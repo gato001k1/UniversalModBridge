@@ -62,6 +62,7 @@ public final class LegacyRenderCapture {
     private static final int GL_CULL_FACE = 2884;
     private static final int GL_TEXTURE_2D = 3553;
     private static final int GL_BLEND = 3042;
+    private static final int GL_LIGHTING = 2896;
     private static final ThreadLocal<Capture> ACTIVE = new ThreadLocal<Capture>();
     private static final ThreadLocal<Minecraft> ACTIVE_MINECRAFT = new ThreadLocal<Minecraft>();
     private static final Object LOCK = new Object();
@@ -268,12 +269,67 @@ public final class LegacyRenderCapture {
     }
 
     public static EntityRenderCapture capture(Entity entity, float partialTick) {
-        return capture(entity, partialTick, false);
+        return capture(entity, partialTick, false, NOT_RIDDEN_BY_VIEWER);
+    }
+
+    /**
+     * Captures the vehicle the local player rides under that player's camera mode
+     * ({@code GameSettings.thirdPersonView}: 0 first person, 1/2 third person). A negative mode
+     * is the ordinary neutral capture. See {@link dev.umb.bridge.api.EntityHandle#renderCapture(float, int)}.
+     */
+    public static EntityRenderCapture capture(Entity entity, float partialTick, int riderCameraMode) {
+        return capture(entity, partialTick, false, riderCameraMode);
     }
 
     /** Re-evaluates only the legacy transform/draw boundaries against an already cached mesh. */
     public static EntityRenderCapture captureTransform(Entity entity, float partialTick) {
-        return capture(entity, partialTick, true);
+        return capture(entity, partialTick, true, NOT_RIDDEN_BY_VIEWER);
+    }
+
+    /** Camera mode argument for captures of anything but the local player's own vehicle. */
+    public static final int NOT_RIDDEN_BY_VIEWER = -1;
+
+    /**
+     * Cache-key suffix for a rider camera mode. The legacy renderer may draw a different mesh for
+     * its own pilot in first person (hidden parts), so a first-person capture must never be served
+     * to a third-person view or to other players' views of the same model, and vice versa.
+     */
+    public static String viewerCacheSuffix(int riderCameraMode) {
+        return riderCameraMode < 0 ? "" : "|viewer=" + Math.min(riderCameraMode, 2);
+    }
+
+    /**
+     * Installs {@code riderCameraMode} as the facade's {@code GameSettings.thirdPersonView}
+     * (field_74320_O) for one capture and returns the previous value for
+     * {@link #restoreRiderCameraMode}; returns {@link Integer#MIN_VALUE} (nothing to restore)
+     * for a negative mode or when the facade has no settings. The facade Minecraft is a shared
+     * singleton, so every install must be paired with a restore in a finally block.
+     */
+    public static int installRiderCameraMode(Object minecraft, int riderCameraMode) {
+        if (riderCameraMode < 0 || minecraft == null) return Integer.MIN_VALUE;
+        try {
+            Object settings = field(minecraft.getClass(), "field_71474_y").get(minecraft);
+            if (settings == null) return Integer.MIN_VALUE;
+            Field view = field(settings.getClass(), "field_74320_O");
+            int previous = view.getInt(settings);
+            view.setInt(settings, Math.min(riderCameraMode, 2));
+            return previous;
+        } catch (Throwable failure) {
+            logRateLimited(DIAGNOSTIC_LOG_NANOS, "rider-camera-mode",
+                    "[CAPTURE-VIEW] rider camera mode skipped reason=" + reason(failure));
+            return Integer.MIN_VALUE;
+        }
+    }
+
+    /** Restores the value returned by {@link #installRiderCameraMode}. */
+    public static void restoreRiderCameraMode(Object minecraft, int previous) {
+        if (previous == Integer.MIN_VALUE || minecraft == null) return;
+        try {
+            Object settings = field(minecraft.getClass(), "field_71474_y").get(minecraft);
+            if (settings != null) field(settings.getClass(), "field_74320_O").setInt(settings, previous);
+        } catch (Throwable ignored) {
+            // The install above succeeded on the same objects; nothing else can be done here.
+        }
     }
 
     /**
@@ -353,6 +409,8 @@ public final class LegacyRenderCapture {
                         "item|" + key, "item|" + key + "|partial=" + quantizedPartialBucket(partialTick),
                         "item|" + key, !transformOnly && cacheGet("mesh", "item|" + key) == null);
                 c.enable(GL_CULL_FACE);
+                // ItemRenderer runs inside RenderHelper.enableStandardItemLighting in 1.7.10.
+                c.enable(GL_LIGHTING);
                 ACTIVE.set(c);
                 ACTIVE_MINECRAFT.set(binding.minecraft);
                 // Forge 1.7.10 passes a RenderBlocks first: ENTITY (rb, EntityItem), EQUIPPED and
@@ -429,6 +487,8 @@ public final class LegacyRenderCapture {
                 String cls = tile.getClass().getName();
                 String key = cls + "@" + tile.field_145851_c + "," + tile.field_145848_d + "," + tile.field_145849_e;
                 Capture c = new Capture(cls, key, cls, cls, cls, true);
+                // 1.7.10 RenderGlobal.renderEntities draws tile entities with standard lighting on.
+                c.enable(GL_LIGHTING);
                 ACTIVE.set(c);
                 ACTIVE_MINECRAFT.set(binding.minecraft);
                 renderer.func_147500_a(tile, 0.0D, 0.0D, 0.0D, partialTick);
@@ -453,7 +513,8 @@ public final class LegacyRenderCapture {
         }
     }
 
-    private static EntityRenderCapture capture(Entity entity, float partialTick, boolean transformOnly) {
+    private static EntityRenderCapture capture(Entity entity, float partialTick, boolean transformOnly,
+                                               int riderCameraMode) {
         if (entity == null) return EntityRenderCapture.empty("", "");
         synchronized (LOCK) {
             try {
@@ -465,7 +526,8 @@ public final class LegacyRenderCapture {
                 String staticState = renderState(entity, false);
                 String dynamicState = renderState(entity, true);
                 boolean dynamic = dynamicState.length() != staticState.length();
-                String modelState = entity.getClass().getName() + "|" + staticState;
+                String modelState = entity.getClass().getName() + "|" + staticState
+                        + viewerCacheSuffix(riderCameraMode);
                 // Dynamic values are render inputs, not identities. Keep one replaceable slot per
                 // renderer/model and let the live callback observe the current rotor/throttle/etc.
                 // This is deliberately not a frame/pose key: a 20-minute animation cannot grow a
@@ -517,6 +579,9 @@ public final class LegacyRenderCapture {
                 // renderers that want double-sided faces (RendererLivingEntity, most mods'
                 // flat parts) disable it themselves, which the emulation records per draw.
                 c.enable(GL_CULL_FACE);
+                // It also calls RenderHelper.enableStandardItemLighting before renderEntities, so
+                // entities start lit; unlit parts (beams, markers) disable GL_LIGHTING themselves.
+                c.enable(GL_LIGHTING);
                 c.probeKey = probeKey;
                 c.probeSample = probeSample;
                 c.probeFrame = probeFrame;
@@ -552,10 +617,14 @@ public final class LegacyRenderCapture {
                     manager.func_147938_a(binding.world, textureManager(), null, binding.player, entity,
                             binding.gameSettings, partialTick);
                     cameraScope.install(binding.player, entity, partialTick, baselineSeeded);
+                    // Only the local player's own vehicle sees the real camera mode; the facade
+                    // player stays the render view entity (the camera), never the vehicle.
+                    int previousCameraMode = installRiderCameraMode(binding.minecraft, riderCameraMode);
                     try {
                         renderer.func_76986_a(entity, 0.0D, 0.0D, 0.0D, entity.field_70177_z, partialTick);
                         c.finish();
                     } finally {
+                        restoreRiderCameraMode(binding.minecraft, previousCameraMode);
                         cameraScope.restore();
                     }
                 EntityRenderCapture result = c.result();
@@ -2103,6 +2172,23 @@ public final class LegacyRenderCapture {
         return (T) method.invoke(null, type);
     }
 
+    /**
+     * Seals one emulated draw with the legacy GL state the host needs to replay it faithfully:
+     * GL_CULL_FACE (back faces hidden), GL_BLEND (alpha-blended, e.g. canopy glass drawn with
+     * SRC_ALPHA/ONE_MINUS_SRC_ALPHA) and GL_LIGHTING (normal-shaded vs. lightmap-only).
+     */
+    public static EntityRenderCapture.Draw sealDraw(GlEmulationSession.Draw d, float[] vertices,
+                                                    int vertexCount) {
+        List<Integer> caps = d.state == null ? null : d.state.enabledCaps;
+        boolean cull = caps != null && caps.contains(Integer.valueOf(GL_CULL_FACE));
+        boolean blend = caps != null && caps.contains(Integer.valueOf(GL_BLEND));
+        // No recorded state means no evidence that lighting was switched off: stay lit, the
+        // pre-flag replay behavior.
+        boolean lighting = caps == null || caps.contains(Integer.valueOf(GL_LIGHTING));
+        return EntityRenderCapture.Draw.owned(d.texture, vertices, vertexCount, d.matrix,
+                cull, blend, lighting);
+    }
+
     private static final class Capture {
         final String entityClass, stateKey, cacheKey, transformKey, meshKey;
         final boolean geometryEnabled;
@@ -2169,8 +2255,7 @@ public final class LegacyRenderCapture {
                     a[at++] = v.u; a[at++] = v.v;
                     a[at++] = (float) normal[0]; a[at++] = (float) normal[1]; a[at++] = (float) normal[2];
                 }
-                boolean cull = d.state != null && d.state.enabledCaps.contains(Integer.valueOf(GL_CULL_FACE));
-                draws.add(EntityRenderCapture.Draw.owned(d.texture, a, quads.size(), d.matrix, cull));
+                draws.add(sealDraw(d, a, quads.size()));
             }
             ops = sealed.matrixOps; pushes = sealed.pushes; pops = sealed.pops;
             EntityRenderCapture now = new EntityRenderCapture(entityClass,stateKey,true,ops,pushes,pops,draws);
@@ -2227,7 +2312,7 @@ public final class LegacyRenderCapture {
             for (int i=0;i<transforms.draws.size();i++) {
                 EntityRenderCapture.Draw t=transforms.draws.get(i), b=mesh.draws.get(i);
                 merged.add(EntityRenderCapture.Draw.owned(t.texture == null ? b.texture : t.texture,
-                        b.vertices, b.vertexCount, t.matrix, t.cull));
+                        b.vertices, b.vertexCount, t.matrix, t.cull, t.blend, t.lighting));
             }
             return new EntityRenderCapture(entityClass,stateKey,true,ops,pushes,pops,merged);
         }

@@ -19,7 +19,16 @@ import java.util.Map;
 import net.minecraft.launchwrapper.Launch;
 
 /**
- * A step 6: the host-side harness for {@code M1Probe} - same LegacyLoader/Launch/ "Server thread" setup {@code Bootstrap.java} uses for the G1 snapshot harness, but reflectively drives {@code dev.umb.legacy.legacyside.M1Probe.run()} (which itself boots...
+ * DESIGN.md LANE A step 6: the host-side harness for {@code M1Probe} - same LegacyLoader/Launch/
+ * "Server thread" setup {@code Bootstrap.java} uses for the G1 snapshot harness, but reflectively
+ * drives {@code dev.umb.legacy.legacyside.M1Probe.run()} (which itself boots
+ * {@code LegacyBridgeImpl} and exercises the Brick Furnace scenario) instead of
+ * {@code LegacyDriver} + a registry snapshot.
+ *
+ * <p>Kept deliberately separate from {@code Bootstrap.java} rather than adding a mode flag to it:
+ * the two harnesses drive completely different entry points ({@code LegacyUniverse} vs
+ * {@code dev.umb.bridge.api.LegacyBridge}) and boot the FML {@code Loader} singleton exactly once
+ * each - they must never run in the same JVM.</p>
  */
 public final class M1ProbeMain {
 
@@ -102,7 +111,7 @@ public final class M1ProbeMain {
 
         Runtime.getRuntime().halt(report.startsWith("M1-OK") || report.startsWith("CLIENT-OK")
                 || report.startsWith("ENTITY-OK") || report.startsWith("PERSISTENCE-OK")
-                || report.startsWith("HUD-OK") ? 0 : 1);
+                || report.startsWith("HUD-OK") || report.startsWith("SEATINFO-OK") ? 0 : 1);
     }
 
     private static final class Run implements Runnable {

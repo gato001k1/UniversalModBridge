@@ -32,6 +32,8 @@ public final class LegacyEntityRenderer extends EntityRenderer<Entity, LegacyEnt
         float yaw, pitch;
         Object hostEntity;
         float partial;
+        /** Local player's camera mode when this entity is that player's vehicle, else -1. */
+        int riderCameraMode = -1;
     }
     private final Map<String, LegacyEntityVisual> visuals;
     private final TextureAtlas atlas;
@@ -111,6 +113,38 @@ public final class LegacyEntityRenderer extends EntityRenderer<Entity, LegacyEnt
         state.pitch = entity.getXRot();
         state.hostEntity = entity;
         state.partial = partialTick;
+        state.riderCameraMode = riderCameraMode(entity);
+    }
+
+    /**
+     * The legacy client renders the vehicle its own player rides under that player's camera
+     * mode (renderers hide parts in first person). Returns the host camera in legacy
+     * {@code GameSettings.thirdPersonView} terms (0 first person, 1 back, 2 front) when
+     * {@code entity} carries the local player (directly or as its root vehicle), else -1.
+     */
+    private static int riderCameraMode(Entity entity) {
+        try {
+            net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
+            if (mc == null || mc.player == null || entity == null || entity == mc.player) return -1;
+            if (mc.player.getVehicle() != entity && mc.player.getRootVehicle() != entity) return -1;
+            return legacyCameraMode(mc.options.getCameraType());
+        } catch (Throwable ignored) {
+            return -1;
+        }
+    }
+
+    static int legacyCameraMode(net.minecraft.client.CameraType type) {
+        if (type == null) return -1;
+        if (type.isFirstPerson()) return 0;
+        return type.isMirrored() ? 2 : 1;
+    }
+
+    /** Render-type slot for a legacy draw: GL_BLEND picks translucent, GL_CULL_FACE the cull variant. */
+    static final int SLOT_CUTOUT = 0, SLOT_CUTOUT_CULL = 1, SLOT_TRANSLUCENT = 2, SLOT_TRANSLUCENT_CULL = 3;
+
+    static int renderTypeSlot(boolean cull, boolean blend) {
+        if (blend) return cull ? SLOT_TRANSLUCENT_CULL : SLOT_TRANSLUCENT;
+        return cull ? SLOT_CUTOUT_CULL : SLOT_CUTOUT;
     }
 
     @Override public void submit(State state, PoseStack pose, SubmitNodeCollector collector,
@@ -179,7 +213,7 @@ public final class LegacyEntityRenderer extends EntityRenderer<Entity, LegacyEnt
             }
             long captureStart = System.nanoTime();
             LegacyEntityCaptureClient.Result captureResult =
-                    LegacyEntityCaptureClient.capture(state.hostEntity, state.partial);
+                    LegacyEntityCaptureClient.capture(state.hostEntity, state.partial, state.riderCameraMode);
             long captureNanos = System.nanoTime() - captureStart;
             Object capture = captureResult.capture;
             if (capture == null) {
@@ -207,7 +241,6 @@ public final class LegacyEntityRenderer extends EntityRenderer<Entity, LegacyEnt
             }
             captureBoundsLog(captureEntity, draws);
             noteCullRadius(state.legacyClass, draws, vertices);
-            renderPathLog(captureEntity, "capture");
             boolean animated = capturedFields.animated.getBoolean(capture);
             String cls = captureEntity;
             String key = cls + "|" + String.valueOf(capturedFields.stateKey.get(capture));
@@ -227,6 +260,7 @@ public final class LegacyEntityRenderer extends EntityRenderer<Entity, LegacyEnt
             }
             long rebuildNanos = System.nanoTime() - rebuildStart;
             long submitTotalNanos = 0L;
+            int blendedDraws = 0, unlitDraws = 0;
             for (Object draw : draws) {
                 DrawFields fields = drawFields(draw.getClass());
                 if (fields == null) continue;
@@ -238,17 +272,27 @@ public final class LegacyEntityRenderer extends EntityRenderer<Entity, LegacyEnt
                 TextureBinding binding = textureBinding(texture);
                 if (binding == null) continue;
                 // Legacy draws recorded with GL_CULL_FACE on hide their back faces (a pilot
-                // inside a hull sees the cockpit, not the hull's inner skin).
-                RenderType type = fields.cull != null && fields.cull.getBoolean(draw)
-                        ? binding.cullType : binding.type;
+                // inside a hull sees the cockpit, not the hull's inner skin). Draws recorded with
+                // GL_BLEND on were alpha-blended in 1.7.10 (canopy glass): a cutout type would
+                // draw every partly transparent texel opaque and wall the pilot in.
+                boolean cull = fields.cull != null && fields.cull.getBoolean(draw);
+                boolean blend = fields.blend != null && fields.blend.getBoolean(draw);
+                boolean lit = fields.lighting == null || fields.lighting.getBoolean(draw);
+                if (blend) blendedDraws++;
+                if (!lit) unlitDraws++;
+                RenderType type = binding.type(renderTypeSlot(cull, blend));
                 final float[] capturedVertices = data;
                 final float[] capturedMatrix = matrix;
                 final int vertexCount = count;
+                final boolean capturedLit = lit;
                 long submitStart = System.nanoTime();
                 collector.submitCustomGeometry(pose, type, (p, out) -> emitCaptured(
-                        capturedVertices, vertexCount, capturedMatrix, p, out, state.lightCoords));
+                        capturedVertices, vertexCount, capturedMatrix, p, out, state.lightCoords, capturedLit));
                 submitTotalNanos += System.nanoTime() - submitStart;
             }
+            renderPathLog(captureEntity, "capture", " viewer=" + state.riderCameraMode
+                    + " light=0x" + Integer.toHexString(state.lightCoords)
+                    + " draws=" + draws.size() + " blend=" + blendedDraws + " unlit=" + unlitDraws);
             profile(captureNanos, rebuildNanos, submitTotalNanos);
             return true;
         } catch (Throwable failure) {
@@ -259,13 +303,17 @@ public final class LegacyEntityRenderer extends EntityRenderer<Entity, LegacyEnt
     }
 
     private static void renderPathLog(String entity, String path) {
+        renderPathLog(entity, path, "");
+    }
+
+    private static void renderPathLog(String entity, String path, String detail) {
         String key = entity == null ? "" : entity;
         long now = System.nanoTime();
         Long previous = RENDER_PATH_LOG_NANOS.putIfAbsent(key, now);
         if (previous != null && now - previous < CAPTURE_LOG_INTERVAL_NANOS) return;
         if (previous != null) RENDER_PATH_LOG_NANOS.put(key, now);
         ObjLog.loud("[VEHICLE-GL-EMU] entity=" + key + " path=" + path
-                + " staticFallback=false");
+                + " staticFallback=false" + detail);
     }
 
     private static boolean isRemoved(Object value) {
@@ -353,16 +401,25 @@ public final class LegacyEntityRenderer extends EntityRenderer<Entity, LegacyEnt
             fields.vertices.setAccessible(true);
             fields.matrix.setAccessible(true);
             fields.vertexCount.setAccessible(true);
-            try {
-                fields.cull = type.getField("cull");
-                if (fields.cull.getType() != boolean.class) fields.cull = null;
-            } catch (NoSuchFieldException olderBridge) {
-                fields.cull = null;
-            }
+            fields.cull = optionalBoolean(type, "cull");
+            fields.blend = optionalBoolean(type, "blend");
+            fields.lighting = optionalBoolean(type, "lighting");
             DrawFields previous = DRAW_FIELDS.putIfAbsent(type, fields);
             return previous == null ? fields : previous;
         } catch (Throwable failure) {
             DRAW_FIELDS.putIfAbsent(type, DrawFields.MISSING);
+            return null;
+        }
+    }
+
+    /** Optional boolean Draw state; absent from older bridge copies. */
+    private static Field optionalBoolean(Class<?> type, String name) {
+        try {
+            Field f = type.getField(name);
+            if (f.getType() != boolean.class) return null;
+            f.setAccessible(true);
+            return f;
+        } catch (NoSuchFieldException olderBridge) {
             return null;
         }
     }
@@ -374,8 +431,11 @@ public final class LegacyEntityRenderer extends EntityRenderer<Entity, LegacyEnt
         try {
             Identifier id = Identifier.parse(normalized);
             LegacyCaptureTextureResolver.ensure(id);
+            // entityTranslucentCullItemTarget is 26.2's only culled translucent entity type
+            // (pipeline entity_translucent_cull); plain entityTranslucent is built withCull(false).
             TextureBinding built = new TextureBinding(id, RenderTypes.entityCutout(id),
-                    RenderTypes.entityCutoutCull(id));
+                    RenderTypes.entityCutoutCull(id), RenderTypes.entityTranslucent(id),
+                    RenderTypes.entityTranslucentCullItemTarget(id));
             TextureBinding previous = TEXTURE_TYPES.putIfAbsent(normalized, built);
             Long previousDiag = TEXTURE_DIAG_NANOS.putIfAbsent(normalized, System.nanoTime());
             if (previousDiag == null) {
@@ -392,8 +452,20 @@ public final class LegacyEntityRenderer extends EntityRenderer<Entity, LegacyEnt
         final Identifier id;
         final RenderType type;
         final RenderType cullType;
-        TextureBinding(Identifier id, RenderType type, RenderType cullType) {
+        final RenderType translucentType;
+        final RenderType translucentCullType;
+        TextureBinding(Identifier id, RenderType type, RenderType cullType,
+                       RenderType translucentType, RenderType translucentCullType) {
             this.id = id; this.type = type; this.cullType = cullType;
+            this.translucentType = translucentType; this.translucentCullType = translucentCullType;
+        }
+        RenderType type(int slot) {
+            switch (slot) {
+                case SLOT_CUTOUT_CULL: return cullType;
+                case SLOT_TRANSLUCENT: return translucentType;
+                case SLOT_TRANSLUCENT_CULL: return translucentCullType;
+                default: return type;
+            }
         }
     }
 
@@ -408,8 +480,8 @@ public final class LegacyEntityRenderer extends EntityRenderer<Entity, LegacyEnt
     private static final class DrawFields {
         static final DrawFields MISSING = new DrawFields(null, null, null, null);
         final Field texture, vertices, matrix, vertexCount;
-        /** Optional (absent from older bridge copies): legacy GL_CULL_FACE state per draw. */
-        Field cull;
+        /** Optional (absent from older bridge copies): legacy GL_CULL_FACE/GL_BLEND/GL_LIGHTING per draw. */
+        Field cull, blend, lighting;
         DrawFields(Field texture, Field vertices, Field matrix, Field vertexCount) {
             this.texture = texture; this.vertices = vertices; this.matrix = matrix; this.vertexCount = vertexCount;
         }
@@ -571,8 +643,17 @@ public final class LegacyEntityRenderer extends EntityRenderer<Entity, LegacyEnt
         return ns + ":" + path;
     }
 
+    /**
+     * {@code lit=false} replays a draw made with GL_LIGHTING off. 1.7.10 then applied no
+     * directional shading, only texture x color x lightmap. 26.2's entity shader always shades by
+     * normal against the world-space LEVEL light directions (0.2,1,-0.7)/(-0.2,1,0.7), so a
+     * world-up normal (bypassing the pose) yields the full diffuse factor (min(1, 0.4 + 0.6 *
+     * 2 * 0.81) = 1): the draw keeps the lightmap, like 1.7.10, but loses the fake shading.
+     */
+    static final float[] UNLIT_NORMAL = {0f, 1f, 0f};
+
     private static void emitCaptured(float[] data, int count, float[] matrix,
-                                     PoseStack.Pose pose, VertexConsumer out, int light) {
+                                     PoseStack.Pose pose, VertexConsumer out, int light, boolean lit) {
         int n = Math.min(count, data.length / 8);
         for (int i = 0; i < n; i++) {
             int k = i * 8;
@@ -589,10 +670,12 @@ public final class LegacyEntityRenderer extends EntityRenderer<Entity, LegacyEnt
                 if (length > 1.0e-6f) { tnx /= length; tny /= length; tnz /= length; }
                 x = tx; y = ty; z = tz; nx = tnx; ny = tny; nz = tnz;
             }
-            out.addVertex(pose, x, y, z).setColor(0xFFFFFFFF)
+            VertexConsumer v = out.addVertex(pose, x, y, z).setColor(0xFFFFFFFF)
                     .setUv(data[k + 3], data[k + 4])
                     .setOverlay(net.minecraft.client.renderer.texture.OverlayTexture.NO_OVERLAY)
-                    .setLight(light).setNormal(pose, nx, ny, nz);
+                    .setLight(light);
+            if (lit) v.setNormal(pose, nx, ny, nz);
+            else v.setNormal(UNLIT_NORMAL[0], UNLIT_NORMAL[1], UNLIT_NORMAL[2]);
         }
     }
 

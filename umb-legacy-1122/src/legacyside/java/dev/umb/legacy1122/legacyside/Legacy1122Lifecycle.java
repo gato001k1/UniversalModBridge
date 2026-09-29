@@ -44,6 +44,17 @@ final class Legacy1122Lifecycle {
         File mods = new File(gameDir, "mods");
         if (!mods.isDirectory() && !mods.mkdirs()) throw new IOException("cannot create " + mods);
         for (File jar : modJars) {
+            // A coremod-bearing jar is instead addURL'd straight onto the loader by
+            // Legacy1122CoremodLoader below, so FML's own ModDiscoverer.findClasspathMods sees it
+            // there. ALSO copying it into gameDir/mods would let findModDirMods claim the same mod
+            // id a second time - reproduced live: Loader.identifyDuplicates threw
+            // DuplicateModsFoundException for OpenComputers the first time this ran a real coremod
+            // through the isolated lifecycle. Real FML never double-discovers a coremod jar either
+            // (CoreModManager tracks what it already claimed); this is the same rule, just decided
+            // up front from the manifest instead of a shared "already claimed" set.
+            if (Legacy1122CoremodLoader.readCoreModPluginAttribute(jar) != null) {
+                continue;
+            }
             Files.copy(jar.toPath(), new File(mods, jar.getName()).toPath(),
                     StandardCopyOption.REPLACE_EXISTING);
         }
@@ -52,6 +63,15 @@ final class Legacy1122Lifecycle {
         thread.setContextClassLoader(loader);
         try {
             installForgeTransformers(loader, forgeJar, log);
+            // Third-party FMLCorePlugin coremods (CodeChickenCore/NEI-style plugins, EnderCore,
+            // Forgelin, FoamFix, Mekanism's asm.LoadingHook, ...) must register their ASM
+            // transformers before any of their own jar's classes verify - see
+            // Legacy1122CoremodLoader's own javadoc for why this was missing and what real FML does
+            // here. Must run before FMLInjectionData/loadMods touch any mod class below.
+            List<String> coremods = Legacy1122CoremodLoader.discoverAndRegister(loader, modJars, log);
+            if (!coremods.isEmpty()) {
+                log.accept("UMB-BRIDGE-1122 coremods discovered: " + coremods);
+            }
             Class<?> injection = Class.forName("net.minecraftforge.fml.relauncher.FMLInjectionData", true, loader);
             Field containers = injection.getField("containers");
             Object raw = containers.get(null);
@@ -152,6 +172,29 @@ final class Legacy1122Lifecycle {
         blackboard.put("launchArgs", new java.util.HashMap());
         blackboard.put("forgeLaunchArgs", new java.util.HashMap());
         blackboard.put("TweakClasses", new java.util.ArrayList());
+        // "Tweaks" (distinct key from "TweakClasses" above: that one holds tweak CLASS NAMES,
+        // this one holds the already-INSTANTIATED ITweaker objects) is real LaunchWrapper's own
+        // blackboard contract, populated by Launch.main()'s tweaker-loading loop - which this
+        // lifecycle, by design, never runs (see this class's own javadoc: no ModLauncher/tweaker
+        // boot). Left unseeded, it stays null, and any coremod that introspects "who is the
+        // current side" the way real production code commonly does - index 0 of this list, class
+        // name ending in FMLServerTweaker vs anything else - NPEs before its own bootstrap logic
+        // ever runs. Proven live: MixinBooter's zone.rong.mixinbooter.util.Environment static
+        // !mixinbooter-11.17.jar) and NPE'd on "tweaks is null" the first time this lifecycle
+        // tried to load a coremod that actually reads it - HBM and every coremod tested before
+        // MixinBooter happened not to. The REAL net.minecraftforge.fml.common.launcher
+        // .FMLServerTweaker cannot be constructed here - its superclass FMLTweaker's constructor
+        // calls System.setSecurityManager(...), which throws UnsupportedOperationException
+        // unconditionally on modern JDKs (proven live: this was this fix's first attempt) -
+        // dev.umb.legacy1122.legacyside.FMLServerTweaker is a harmless same-simple-name stand-in built
+        // for exactly this (see its own javadoc); Class.getName().endsWith("FMLServerTweaker")
+        // still matches it.
+        Object serverTweaker = Class.forName(
+                "dev.umb.legacy1122.legacyside.FMLServerTweaker", true, loader)
+                .getDeclaredConstructor().newInstance();
+        java.util.List<Object> tweaks = new java.util.ArrayList<Object>();
+        tweaks.add(serverTweaker);
+        blackboard.put("Tweaks", tweaks);
         launchType.getField("blackboard").set(null, blackboard);
         launchType.getField("classLoader").set(null, loader);
         Class<?> remapperType = Class.forName(
@@ -167,6 +210,22 @@ final class Legacy1122Lifecycle {
         Method transformer = launchLoaderType.getMethod("registerTransformer", String.class);
         exclude.invoke(loader, "net.minecraftforge.fml.common.asm.transformers.");
         exclude.invoke(loader, "net.minecraftforge.fml.common.patcher.");
+        // Real Forge/LaunchWrapper excludes its own bundled third-party libraries (Gson among
+        // them) from the mod transformer pipeline for exactly the reason this fix exists: Gson is
+        // itself used DURING mod loading (a coremod's own JSON-based metadata scan, e.g.), so
+        // transforming Gson's own classes on demand is a bootstrapping hazard, not a feature any
+        // mod needs. Without this exclusion, the FIRST class loaded through this loader that
+        // pulls in an ANNOTATION TYPE from Gson (any class with an @JsonAdapter-annotated field
+        // somewhere in its type graph - proven live: MixinBooter's own ModDiscoverer.discover()
+        // parses mod metadata JSON with a plain new GsonBuilder().create(), triggering exactly
+        // this) crashes EventSubscriptionTransformer.transform() with
+        // "IllegalAccessError: failed to access class org.objectweb.asm.tree.MethodNode$1 from
+        // class org.objectweb.asm.tree.MethodNode" - ASM's own annotation-default-value visitor
+        // splitting an inner-class reference across two different loaders while re-entrantly
+        // parsing bytecode mid-transform. Not mod-specific: any code path (ours or a mod's) that
+        // makes Gson touch an @JsonAdapter type for the first time through this loader hits the
+        // identical wall.
+        exclude.invoke(loader, "com.google.gson.");
         transformer.invoke(loader, "net.minecraftforge.fml.common.asm.transformers.PatchingTransformer");
         transformer.invoke(loader, "net.minecraftforge.fml.common.asm.transformers.DeobfuscationTransformer");
         transformer.invoke(loader, "net.minecraftforge.fml.common.asm.transformers.EventSubscriptionTransformer");
@@ -187,7 +246,35 @@ final class Legacy1122Lifecycle {
             log.accept("UMB-BRIDGE-1122 Pack200 lookup failed=" + missingPack200);
         }
         Object manager = managerType.getField("INSTANCE").get(null);
-        managerType.getMethod("setup", sideType).invoke(manager, client);
+        try {
+            managerType.getMethod("setup", sideType).invoke(manager, client);
+        } catch (Throwable setupFailure) {
+            // Real ClassPatchManager.setup() calls java.util.jar.Pack200.newUnpacker() directly
+            // jar); JEP 367 removed that JDK API in Java 21, so setup() throws NoClassDefFoundError
+            // before it ever populates its own "patches" map - the diagnostic probe two lines above
+            // already predicted exactly this ("Pack200 lookup failed") but the failure used to be
+            // left unhandled, so EVERY 1.12.2 boot crashed right here (proven: once
+            // run-headless.ps1's Boot-1122 was fixed to actually drive this lifecycle instead of a
+            // flat-classpath smoke test, every picked mod - coremod or not - crashed at this exact
+            // line). The fallback is not new code: it is the SAME repairPatchTable path already
+            // below for "setup succeeded but left the map empty", which decodes the same
+            // binpatches.pack.lzma stream through Apache Commons Compress's Harmony unpack200
+            // implementation instead of the JDK's removed one. No patch data is invented here.
+            Throwable cause = unwrap(setupFailure);
+            log.accept("UMB-BRIDGE-1122 ClassPatchManager.setup failed, falling back to "
+                    + "repairPatchTable: " + cause.getClass().getName() + ":" + cause.getMessage());
+            // setup() assigns its own "patches" ListMultimap before it ever reaches the Pack200
+            // ClassPatchManager declares it as a private, non-final
+            // com.google.common.collect.ListMultimap, never initialised at the field declaration).
+            // repairPatchTable below needs a real (empty) Multimap to put() into - the same shape
+            // a successful setup() would have produced - not a null it would NPE on.
+            Field patchesField0 = managerType.getDeclaredField("patches");
+            patchesField0.setAccessible(true);
+            if (patchesField0.get(manager) == null) {
+                Class<?> multimapType = Class.forName("com.google.common.collect.ArrayListMultimap", true, loader);
+                patchesField0.set(manager, multimapType.getMethod("create").invoke(null));
+            }
+        }
         URL pack = loader.getResource("binpatches.pack.lzma");
         log.accept("UMB-BRIDGE-1122 patch resource=" + pack + " loader=" + loader
                 + " tccl=" + Thread.currentThread().getContextClassLoader());
@@ -261,8 +348,10 @@ final class Legacy1122Lifecycle {
             }
             byte[] pack200 = lzmaBytes.toByteArray();
             log.accept("UMB-BRIDGE-1122 LZMA bytes=" + pack200.length + " magic=" + hexPrefix(pack200));
-            try {
-                File liveDump = new File(System.getProperty("java.io.tmpdir"), "umb-1122-live-binpatches.pack");
+            // Debug aid, opt-in: -Dumb.1122.dumpBinpatches=<file> writes the decoded pack.
+            String dumpPath = System.getProperty("umb.1122.dumpBinpatches");
+            if (dumpPath != null && !dumpPath.isEmpty()) try {
+                File liveDump = new File(dumpPath);
                 File parent = liveDump.getParentFile();
                 if (parent != null) parent.mkdirs();
                 Files.write(liveDump.toPath(), pack200);
@@ -328,12 +417,10 @@ final class Legacy1122Lifecycle {
             fixer = Class.forName("net.minecraft.util.datafix.DataFixer", true, loader);
         } catch (ClassNotFoundException missingDeobfuscatedName) {
             // Forge 1.12.2's universal/client jars carry the vanilla class as the notch name
-            // ry; CompoundDataFixer is compiled against that exact superclass (javap: extends ry).
             fixer = Class.forName("ry", true, loader);
         }
         Object vanilla = fixer.getConstructor(int.class).newInstance(Integer.valueOf(1343));
         // IFMLSidedHandler.getDataFixer() returns CompoundDataFixer and FMLCommonHandler returns it
-        // unchanged, so every mod's init that touches the fixer (IronChest live 2026-09-26 02:12:
         // ClassCastException DataFixer -> CompoundDataFixer) needs the real Forge wrapper.
         try {
             Class<?> compound = Class.forName("net.minecraftforge.common.util.CompoundDataFixer", true, loader);

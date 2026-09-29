@@ -63,9 +63,8 @@ public final class LegacyGuiPainter {
             if (draw.state != null && !draw.state.enabledCaps.contains(GL_BLEND)) {
                 color |= 0xFF000000;
             }
-            boolean textured = draw.state != null
-                    && draw.state.enabledCaps.contains(GL_TEXTURE_2D)
-                    && draw.texture != null && !draw.texture.isEmpty();
+            boolean wantsTexture = draw.state != null && draw.state.enabledCaps.contains(GL_TEXTURE_2D);
+            boolean textured = wantsTexture && draw.texture != null && !draw.texture.isEmpty();
             boolean anyBlit = false;
             for (int i = 0; i + 3 < draw.vertices.size(); i += 4) {
                 GlEmulationSession.Vertex a = draw.vertices.get(i);
@@ -125,7 +124,10 @@ public final class LegacyGuiPainter {
                         // A missing/unparseable legacy bind gets the same bounded color fallback.
                         if (sample != null) sample.resolveFailed = true;
                     }
+                } else if (wantsTexture && sample != null) {
+                    sample.unresolvable = true;
                 }
+                if (wantsTexture) continue;
                 gui.fill(x, y, x + w, y + h, color);
                 painted++;
                 if (sample != null) sample.filled(color);

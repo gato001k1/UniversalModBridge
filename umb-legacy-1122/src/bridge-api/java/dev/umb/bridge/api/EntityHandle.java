@@ -49,7 +49,6 @@ public interface EntityHandle {
      * entity keeps outside its base box.  Found by type only (Entity/AxisAlignedBB fields, never
      * a mod class or field name); the host unions them with the base box into its single native
      * bounding box, because 26.2 entity-entity collision ({@code EntityGetter.getEntityCollisions},
-     * javap-verified) contributes exactly one box per entity.  Null is an honest "none known".
      * Must never throw across the boundary.
      */
     default java.util.List<double[]> getCollisionBoxes() { return null; }
@@ -111,5 +110,17 @@ public interface EntityHandle {
     /** Runs this entity's registered legacy client Render against UMB's capture backend. */
     default EntityRenderCapture renderCapture(float partialTick) {
         return EntityRenderCapture.empty(legacyEntityClassName(), legacyEntityId());
+    }
+
+    /**
+     * As {@link #renderCapture(float)}, for the entity the local player rides. The legacy client
+     * renders that vehicle under the player's own camera mode, and renderers branch on it (e.g.
+     * parts hidden in first person). {@code riderCameraMode} is the host camera mode in legacy
+     * {@code GameSettings.thirdPersonView} terms: 0 first person, 1 third-person back, 2
+     * third-person front. A negative value means "not the local player's vehicle" and must behave
+     * exactly like {@link #renderCapture(float)}. Must never throw across the boundary.
+     */
+    default EntityRenderCapture renderCapture(float partialTick, int riderCameraMode) {
+        return renderCapture(partialTick);
     }
 }

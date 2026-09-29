@@ -73,6 +73,11 @@ import net.minecraftforge.registries.RegistryManager;
  *   <li>{@code LoadingModList.of(...)} is real; it is injected into
  *       {@code FMLLoader.loadingModList} reflectively (private static, set where ModLauncher's
  *       boot would set it).</li>
+ *   <li>{@code Launcher.run(args)}'s {@code TransformationServicesHandler
+ *       .initializeTransformationServices(...)} ends by binding
+ *       {@code NameMappingServiceHandler.nameBindings} (real ModLauncher, private field, starts
+ *       null) - see {@link #bindObfuscationNameMappings} for the full trace and why this was
+ *       missing before and is fixed now.</li>
  *   <li>Mod containers: production builds them through language providers over a
  *       {@code TransformingClassLoader}. {@code FMLModContainer} takes a plain
  *       {@code ClassLoader}, so it is constructed DIRECTLY with the isolated loader and the
@@ -210,6 +215,15 @@ public final class Legacy1165Lifecycle {
             throw new IllegalStateException("Launcher.INSTANCE still null after ctor");
         }
         result.add("scaffold", true, ms(t0), null);
+
+        // ---- name-mapping bindings (the fix for the ObfuscationReflectionHelper NPE wall - see
+        // bindObfuscationNameMappings' own javadoc for the full trace). Must run as early as
+        // possible after Launcher.INSTANCE exists: any later reflective member lookup (a mod's own
+        // ObfuscationReflectionHelper.findField/getPrivateValue/setPrivateValue call, which can
+        // legitimately happen from a @Mod constructor during CONSTRUCT) needs it already bound.
+        t0 = now();
+        bindObfuscationNameMappings(log);
+        result.add("obfuscation-name-bindings", true, ms(t0), null);
 
         // ---- vanilla Bootstrap FIRST (order is load-bearing: its patched Registry hook pulls
         // GameData.<clinit>/init() in mid-flight - proven by failure in round 2).
@@ -1111,6 +1125,54 @@ public final class Legacy1165Lifecycle {
         return -1;
     }
 
+
+    /**
+     * Real ModLauncher's {@code Launcher.run(args)} - which this lifecycle never calls, using only
+     * the private no-arg constructor to stand up {@code Launcher.INSTANCE} (see the "ModLauncher
+     * scaffold" step above) - ends {@code TransformationServicesHandler
+     * .initializeTransformationServices(...)} by calling {@code Launcher}'s private
+     * against modlauncher-8.1.3.jar: {@code TransformationServicesHandler.initializeTransformationServices}
+     * reads the {@code NAMING} environment property, defaulting to {@code "mojang"}, and passes it
+     * straight to {@code bindNamingServices}). That call is the ONLY place
+     * {@code NameMappingServiceHandler.nameBindings} (a private, non-final
+     * {@code Map<String, NameMappingServiceDecorator>}) is ever assigned - it starts {@code null},
+     * not an empty map. Skipping it left {@code nameBindings} null forever, so the first mod to call
+     * {@code net.minecraftforge.fml.common.ObfuscationReflectionHelper.findField}/
+     * {@code getPrivateValue}/{@code setPrivateValue} (a normal way to reach a private/renamed
+     * vanilla member - {@code remapName} always asks {@code FMLLoader.getNameFunction("srg")}, which
+     * chains through {@code Environment.findNameMapping} -&gt; {@code Launcher.findNameMapping} -&gt;
+     * {@code NameMappingServiceHandler.findNameTranslator}, whose body is
+     * {@code this.nameBindings.get(name)}) NPE'd on the null map before reflection ever ran -
+     * proven live: Sophisticated Backpacks on 1.16.5,
+     * {@code UnableToFindFieldException: ... "this.nameBindings" is null}.
+     *
+     * <p>No real fix is needed beyond making the call: this jar set (forge/modlauncher/fml/
+     * coremods/eventbus/accesstransformers) has NO {@code META-INF/services/
+     * cpw.mods.modlauncher.api.INameMappingService} provider anywhere (checked byte-for-byte across
+     * {@code bindNamingServices} always produces an EMPTY (never null) map regardless of which
+     * domain string is passed - {@code findNameTranslator} then correctly returns
+     * {@code Optional.empty()} and {@code ObfuscationReflectionHelper.remapName}'s own
+     * {@code Optional.orElse(name)} returns the name UNCHANGED. That is the CORRECT behaviour for
+     * this project: vanilla/Forge classes are already genuinely SRG-named at runtime here (the same
+     * "one real name, no separate MCP mapping to bridge" property umb-legacy's own SRG field-repair
+     * work relies on for 1.7.10) - there is no actual name translation this environment needs to
+     * perform, only the bookkeeping structure that real ModLauncher always initialises before any
+     * mod code can run. {@code "srg"} is passed purely to match the literal domain
+     * {@code ObfuscationReflectionHelper.remapName} requests; since nothing validates for any
+     * domain, the exact string does not change the outcome.</p>
+     */
+    private static void bindObfuscationNameMappings(Consumer<String> log) throws Exception {
+        Field handlerField = Launcher.class.getDeclaredField("nameMappingServiceHandler");
+        handlerField.setAccessible(true);
+        Object handler = handlerField.get(Launcher.INSTANCE);
+        if (handler == null) {
+            throw new IllegalStateException("Launcher.INSTANCE.nameMappingServiceHandler is null");
+        }
+        Method bindNamingServices = handler.getClass().getDeclaredMethod("bindNamingServices", String.class);
+        bindNamingServices.setAccessible(true);
+        bindNamingServices.invoke(handler, "srg");
+        log.accept("[lifecycle] ObfuscationReflectionHelper name-mapping bindings bound (domain=srg)");
+    }
 
     private static void setInstanceField(Object owner, String name, Object value) throws Exception {
         Field field = owner.getClass().getDeclaredField(name);

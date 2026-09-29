@@ -93,6 +93,58 @@ class Legacy1165BridgeImplTest {
         }
     }
 
+    /**
+     * The regression this guards: {@code ObfuscationReflectionHelper.findField}/{@code
+     * getPrivateValue}/{@code setPrivateValue} - a normal way for a mod to reach a private/renamed
+     * vanilla member (Sophisticated Backpacks does this on real 1.16.5) - used to
+     * {@code UnableToFindFieldException} wrapping a bare NullPointerException on
+     * {@code "this.nameBindings"} for EVERY class/field pair, because
+     * {@code Legacy1165Lifecycle} never called real ModLauncher's
+     * {@code NameMappingServiceHandler.bindNamingServices(...)} (see
+     * {@code Legacy1165Lifecycle.bindObfuscationNameMappings}'s own javadoc for the full trace).
+     * Uses a field ({@code Minecraft.field_71432_P}, the singleton instance field) already relied on
+     * elsewhere in this module ({@code Legacy1165Lifecycle} itself reads it reflectively in several
+     * places), so this is not inventing a new fixture - it is exercising the exact same real field
+     * through the PUBLIC Forge API a mod would actually call, instead of this module's own internal
+     * direct reflection.
+     */
+    @Test
+    void obfuscationReflectionHelperFindFieldWorksAfterBoot() throws Exception {
+        assumeTrue(forgeReachable(), "real ModLauncher/Forge 1.16.5 classes not on the test classpath - skipping");
+        setModJarsProperty();
+        File repo = TestRepo.find();
+        File manifest = new File(repo, "umb-legacy-1165/resources/classpath-1165.txt");
+        assumeTrue(manifest.isFile(), "classpath-1165.txt not present - skipping");
+        List<File> files;
+        try {
+            files = dev.umb.legacy1165.boot.Legacy1165Classpath.readManifest(repo, manifest);
+        } catch (Exception e) {
+            assumeTrue(false, "a jar listed in classpath-1165.txt is missing - skipping: "
+                    + e.getMessage());
+            return;
+        }
+        URL[] urls = dev.umb.legacy1165.boot.Legacy1165Classpath.toUrls(files);
+        try (dev.umb.legacy1165.boot.Legacy1165Loader loader =
+                new dev.umb.legacy1165.boot.Legacy1165Loader(urls,
+                        Legacy1165BridgeImplTest.class.getClassLoader())) {
+            Class<?> bridgeClass = Class.forName(
+                    "dev.umb.legacy1165.legacyside.Legacy1165BridgeImpl", true, loader);
+            Object bridge = bridgeClass.getDeclaredConstructor().newInstance();
+            bridgeClass.getMethod("boot", HostWorld.class).invoke(bridge, new FakeHostWorld());
+            assertTrue(((Boolean) bridgeClass.getMethod("isBooted").invoke(bridge)).booleanValue());
+
+            Class<?> orh = Class.forName(
+                    "net.minecraftforge.fml.common.ObfuscationReflectionHelper", true, loader);
+            Class<?> minecraftClass = Class.forName("net.minecraft.client.Minecraft", true, loader);
+            Method findField = orh.getMethod("findField", Class.class, String.class);
+            Object field = findField.invoke(null, minecraftClass, "field_71432_P");
+            assertNotNull(field, "ObfuscationReflectionHelper.findField returned null");
+        } catch (java.lang.reflect.InvocationTargetException e) {
+            throw new IllegalStateException("findField after boot failed", e.getCause() != null
+                    ? e.getCause() : e);
+        }
+    }
+
     @Test
     void bootThrowsClearlyWhenNotConstructedInUniverse() {
         // The bridge refuses to boot outside its isolated loader instead of half-booting
@@ -177,7 +229,6 @@ class Legacy1165BridgeImplTest {
         public dev.umb.bridge.api.StackData getInventorySlot(int i) { return dev.umb.bridge.api.StackData.EMPTY; }
         public void setInventorySlot(int i, dev.umb.bridge.api.StackData s) { }
         public int getInventorySize() { return 36; }
-        // TICK/CONTACT lane additions: this fake is stationary and unhurtable.
         public double getMotionX() { return 0; }
         public double getMotionY() { return 0; }
         public double getMotionZ() { return 0; }

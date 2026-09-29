@@ -5,6 +5,7 @@ import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Consumer;
 
 import dev.umb.legacy.api.LegacyUniverse;
 import dev.umb.legacy.api.RegistrySnapshot;
@@ -37,10 +38,15 @@ import net.minecraftforge.classloading.FMLForgePlugin;
  *   <tr><td>FMLLaunchHandler.setupServer</td><td>we set {@code FMLLaunchHandler.side} and
  *       {@code FMLRelaunchLog.side}/{@code minecraftHome} directly and call the package-private
  *       {@code FMLInjectionData.build}.</td></tr>
- *   <tr><td>CoreModManager.handleLaunch</td><td>SKIPPED. It registers PatchingTransformer (our
- *       runtime jar is already binpatched), discovers coremods (HBM has none) and seeds
- *       {@code FMLInjectionData.containers} from the two root plugins - we seed those two names by
- *       hand and set the two source-jar statics their containers report.</td></tr>
+ *   <tr><td>CoreModManager.handleLaunch</td><td>PARTIALLY reproduced. Its PatchingTransformer
+ *       registration is skipped (our runtime jar is already binpatched) and its
+ *       {@code FMLInjectionData.containers} seeding is done by hand (two root plugin names, two
+ *       source-jar statics) - but its OTHER job, discovering every jar's own
+ *       {@code FMLCorePlugin} manifest attribute and registering the ASM transformers it declares,
+ *       is real: see {@link LegacyCoremodLoader}. HBM ships no coremod of its own, which is why this
+ *       table used to say the whole step was skipped; the surprise-test corpus
+ *       Mekanism, ...), so leaving it skipped meant their classes verified against unpatched
+ *       bytecode and threw whatever the coremod's own transformer exists to prevent.</td></tr>
  *   <tr><td>FMLDeobfTweaker.injectIntoClassLoader</td><td>we register the same transformer list
  *       minus DeobfuscationTransformer (SRG environment) and minus ModAccessTransformer (see
  *       README), then call {@code Loader.injectData} + {@code Loader.instance()}.</td></tr>
@@ -105,6 +111,18 @@ public final class LegacyDriver implements LegacyUniverse {
         FMLForgePlugin.RUNTIME_DEOBF = Boolean.parseBoolean(
                 System.getProperty("umb.legacy.runtimeDeobf", "false"));
 
+        // ---- 4b. third-party FMLCorePlugin coremods, discovered from whatever is already on the
+        // isolated loader's own classpath (see LegacyCoremodLoader's javadoc for why this step used
+        // to be skipped and what real FML's CoreModManager does here). Must run before step 5's
+        // transformer list AND before any mod class below has a chance to verify, so its own
+        // transformer sees the class first - the same order real FML uses (coremods register during
+        // the tweaker chain, before FMLDeobfTweaker adds the standard FML list).
+        List<String> coremods = LegacyCoremodLoader.discoverAndRegister(lcl,
+                msg -> FMLRelaunchLog.info("%s", msg));
+        if (!coremods.isEmpty()) {
+            FMLRelaunchLog.info("[umb-legacy] coremods discovered: %s", coremods);
+        }
+
         // ---- 5. transformers
         List<String> registered = new ArrayList<String>();
         List<String> failed = new ArrayList<String>();
@@ -156,8 +174,22 @@ public final class LegacyDriver implements LegacyUniverse {
     }
 
     /**
- * GENERALITY fix : this used to be an unconditional check, hardcoded to exactly one member HBM's OWN bundled {@code HBM_at.cfg} (an {@code FMLAT:} manifest entry inside HBM's own jar) targets - {@code net.minecraft.block.Block.func_149642_a} - with an error...
- */
+     * GENERALITY fix (hostagent-purge #13): this used to be an unconditional check, hardcoded to
+     * exactly one member HBM's OWN bundled {@code HBM_at.cfg} (an {@code FMLAT:} manifest entry
+     * inside HBM's own jar) targets - {@code net.minecraft.block.Block.func_149642_a} - with an
+     * error message calling it out by name. That AT is not something THIS DRIVER applies:
+     * {@code ModAccessTransformer} is deliberately never registered here at all (see this class's
+     * own javadoc table, "minus ModAccessTransformer") - whatever mod-specific AT a mod's jar
+     * declares must already be pre-baked into the checked-in runtime jar
+     * preparation step that is not part of any build script in this repo (confirmed: no
+     * {@code build-legacy.ps1}/harness step regenerates that jar). A genuinely different mod's own
+     * AT config would need that same offline preparation redone for ITS OWN target member -
+     * file) and is documented as such in {@code HOSTAGENT-PURGE.md}, not silently glossed over.
+     * <p>What this method fixes: the check itself no longer hardcodes HBM's target member. Three
+     * system properties name the class/method/parameter-types to probe instead, defaulting to
+     * exactly today's HBM check - so default behaviour for the test mod (and its error message) is
+     * unchanged unless a caller actually overrides them for a different mod's own AT target.
+     */
     private void assertAccessTransformerApplied() throws Exception {
         String className = System.getProperty("umb.legacy.at.class", "net.minecraft.block.Block");
         String methodName = System.getProperty("umb.legacy.at.method", "func_149642_a");

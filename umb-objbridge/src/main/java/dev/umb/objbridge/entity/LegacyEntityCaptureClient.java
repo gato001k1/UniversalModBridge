@@ -12,6 +12,7 @@ import java.util.concurrent.ConcurrentHashMap;
 final class LegacyEntityCaptureClient {
     private static volatile Field HANDLE;
     private static volatile Method RENDER_CAPTURE;
+    private static volatile Method RENDER_CAPTURE_VIEWER;
     private static final Map<Class<?>, Map<String, Field>> FIELD_CACHE = new ConcurrentHashMap<>();
     private static final Map<Class<?>, Set<String>> MISSING_FIELDS = new ConcurrentHashMap<>();
     private static final Map<Class<?>, Map<String, Method>> METHOD_CACHE = new ConcurrentHashMap<>();
@@ -33,16 +34,24 @@ final class LegacyEntityCaptureClient {
     }
 
     static Result capture(Object hostEntity, float partialTick) {
+        return capture(hostEntity, partialTick, -1);
+    }
+
+    /**
+     * {@code riderCameraMode} is the local player's camera mode (legacy thirdPersonView: 0 first
+     * person, 1 back, 2 front) when {@code hostEntity} is the vehicle that player rides, else -1.
+     */
+    static Result capture(Object hostEntity, float partialTick, int riderCameraMode) {
         if (hostEntity == null) return Result.unavailable("host-entity-null");
         try {
             Object handle = handle(hostEntity);
-            if (handle != null) return invokeCapture(handle, partialTick);
+            if (handle != null) return invokeCapture(handle, partialTick, riderCameraMode);
 
             Object serverEntity = integratedServerEntity(hostEntity);
             if (serverEntity == null) return Result.unavailable(lastReason);
             handle = handle(serverEntity);
             if (handle == null) return Result.unavailable("server-handle-null");
-            return invokeCapture(handle, partialTick);
+            return invokeCapture(handle, partialTick, riderCameraMode);
         } catch (Throwable failure) {
             Throwable cause = failure instanceof InvocationTargetException
                     && failure.getCause() != null ? failure.getCause() : failure;
@@ -64,7 +73,26 @@ final class LegacyEntityCaptureClient {
         return value;
     }
 
-    private static Result invokeCapture(Object handle, float partialTick) throws Exception {
+    static Result invokeCapture(Object handle, float partialTick, int riderCameraMode) throws Exception {
+        if (riderCameraMode >= 0) {
+            Method viewer = RENDER_CAPTURE_VIEWER;
+            if (viewer == null || !viewer.getDeclaringClass().isAssignableFrom(handle.getClass())) {
+                viewer = findMethod(handle.getClass(), "renderCapture", float.class, int.class);
+                if (viewer != null) {
+                    viewer.setAccessible(true);
+                    RENDER_CAPTURE_VIEWER = viewer;
+                }
+            }
+            // An older bridge without the camera-aware overload keeps the neutral capture.
+            if (viewer != null) {
+                try {
+                    return Result.ok(viewer.invoke(handle, partialTick, riderCameraMode));
+                } catch (InvocationTargetException ex) {
+                    Throwable cause = ex.getCause() == null ? ex : ex.getCause();
+                    return Result.unavailable("renderCapture-threw:" + cause.getClass().getName());
+                }
+            }
+        }
         Method method = RENDER_CAPTURE;
         if (method == null || !method.getDeclaringClass().isAssignableFrom(handle.getClass())) {
             method = findMethod(handle.getClass(), "renderCapture", float.class);

@@ -25,21 +25,38 @@ public final class EntityRenderCapture {
         }
         /** Internal capture fast path: the arrays are sealed and must not be mutated afterwards. */
         public static Draw owned(String texture, float[] vertices, int vertexCount, float[] matrix) {
-            return new Draw(texture, vertices, vertexCount, matrix, false, false);
+            return new Draw(texture, vertices, vertexCount, matrix, false, false, false, true);
         }
         /** As {@link #owned(String, float[], int, float[])} with the legacy GL_CULL_FACE state. */
         public static Draw owned(String texture, float[] vertices, int vertexCount, float[] matrix,
                                  boolean cull) {
-            return new Draw(texture, vertices, vertexCount, matrix, false, cull);
+            return new Draw(texture, vertices, vertexCount, matrix, false, cull, false, true);
+        }
+        /**
+         * As {@link #owned(String, float[], int, float[], boolean)} with the legacy GL_BLEND and
+         * GL_LIGHTING state of the draw.
+         */
+        public static Draw owned(String texture, float[] vertices, int vertexCount, float[] matrix,
+                                 boolean cull, boolean blend, boolean lighting) {
+            return new Draw(texture, vertices, vertexCount, matrix, false, cull, blend, lighting);
         }
         /** True when the legacy renderer drew this with GL_CULL_FACE enabled (back faces hidden). */
         public final boolean cull;
+        /** True when the legacy renderer drew this with GL_BLEND enabled (alpha-blended, e.g. glass). */
+        public final boolean blend;
+        /**
+         * True when the legacy renderer drew this with GL_LIGHTING enabled (normal-shaded). False
+         * means fixed-function lighting was off: no directional shading, only the lightmap.
+         */
+        public final boolean lighting;
         private Draw(String texture, float[] vertices, int vertexCount, float[] matrix, boolean copy) {
-            this(texture, vertices, vertexCount, matrix, copy, false);
+            this(texture, vertices, vertexCount, matrix, copy, false, false, true);
         }
         private Draw(String texture, float[] vertices, int vertexCount, float[] matrix, boolean copy,
-                     boolean cull) {
+                     boolean cull, boolean blend, boolean lighting) {
             this.cull = cull;
+            this.blend = blend;
+            this.lighting = lighting;
             this.texture = texture;
             this.vertices = vertices == null ? EMPTY_FLOATS : (copy ? vertices.clone() : vertices);
             this.vertexCount = Math.max(0, vertexCount);

@@ -45,22 +45,44 @@ import dev.umb.bridge.api.HostPlayer;
 import dev.umb.bridge.api.HostWorld;
 
 /**
- * The World facade .
- * One {@code UmbWorld} per host {@code ServerLevel}, allocated with {@code Unsafe.allocateInstance} - {@code World}'s two public constructors both need a real {@code ISaveHandler}/{@code WorldSettings}/{@code WorldProvider}/{@code...
+ * The World facade (DESIGN.md LANE A step 3 / facade-fidelity.md section 2 / twin-first-mvp.md
+ * section 4). One {@code UmbWorld} per host {@code ServerLevel}, allocated with
+ * {@code Unsafe.allocateInstance} - {@code World}'s two public constructors both need a real
+ * {@code ISaveHandler}/{@code WorldSettings}/{@code WorldProvider}/{@code Profiler} and touch disk
+ * ({@code finishSetup}/{@code getMapStorage}), and {@code WorldServer}'s own constructor additionally
+ * needs a real {@code MinecraftServer} - none of which exist in the legacy universe.
+ *
+ * <p>Implements the 14 M1 World members DESIGN.md names for real
+ * (`field_72995_K`=false, `field_73012_v`, `field_73011_w`, `field_72984_F`, `func_147439_a`,
+ * `func_72805_g`, `func_147438_o`, `func_147465_d`, `func_72921_c`, `func_147449_b`,
+ * `func_147468_f`, `func_147471_g`, `func_147453_f`, `func_82737_E`). `func_147438_o`
+ * (getTileEntity) is backed by a LOCAL map (packed pos -&gt; legacy TileEntity) because
+ * {@code dev.umb.bridge.api.HostWorld} deliberately carries no tile-entity accessor - tile
+ * identity lives entirely on the legacy side and crosses the boundary only as an opaque
+ * {@code TileHandle} (see THE BOUNDARY CONTRACT); {@link #putTile}/{@link #removeTileAt} are how
+ * {@code LegacyBridgeImpl} (step 5) populates it.
+ *
+ * <p>A handful of additional members beyond the 14 are implemented for real because they are
+ * trivial and directly useful (`func_147455_a` setTileEntity, `func_147475_p` removeTileEntity,
+ * `func_147437_c` isAirBlock) - not counted against the "14" since DESIGN.md defines that number,
+ * but not hidden either; the coverage report lists them separately. Everything else a legacy mod might call
+ * on `World`/`WorldServer` is a counted stub (logs once, returns a safe default) - see
+ * {@link UmbStub}; DESIGN.md step 3 does not require mechanically overriding all ~100-214 members,
+ * and this build does not attempt that (R8: build, do not grind) - a bounded, documented set of the
+ * highest call-site members from facade-fidelity.md's ranked table is stubbed instead.</p>
  */
 public final class UmbWorld extends WorldServer {
 
     private static final String FACADE = "UmbWorld";
 
-/** Legacy compatibility behavior. */
+    /** Real, beyond the 14: setTileEntity/removeTileEntity/isAirBlock, plus the G2 lane E step-2
+     *  additions (see the block below the M1 section). Stubbed: the rest below. */
     private static final String[] STUBBED_MEMBERS = {
             "func_72962_a(canMineBlock)",
             "func_147464_a(scheduleBlockUpdate)",
-            // E step 2: added after the demand ranking (g2-facade-demand. named
             // these as high-distinct-TE-class-count World members with no HostWorld primitive to
             // back a real implementation. Each is a safe default, not a crash - see per-method
             // javadoc below for the exact contract gap and the proposed dev.umb.bridge.api addition.
-            // upgraded five members OUT of this list (playSoundAtEntity
             // playSoundEffect, spawnParticle, isBlockIndirectlyGettingPowered, newExplosion) -
             // HostWorld now carries playSound/spawnParticle/explode/getRedstonePower for real.
             "func_73040_p(getPlayerManager)",
@@ -70,7 +92,6 @@ public final class UmbWorld extends WorldServer {
     };
 
     static {
-        // 4 fields + 10 methods + 3 bonus real methods (M1) + 7 E step-2
         // real methods (func_72863_F, func_72872_a, func_72839_b, func_147480_a, func_147444_c,
         // func_147459_d, func_147476_b - the last two upgraded FROM the stub list, see their
         // javadoc) + 1 ENTITY-BRIDGE upgrade (func_72838_d, spawnEntityInWorld, upgraded FROM the
@@ -151,28 +172,22 @@ public final class UmbWorld extends WorldServer {
         // mods that use the vanilla save-handler accessor see the facade.
         UmbUnsafe.setField(w, UmbUnsafe.field(World.class, "field_73019_z"),
                 new UmbSaveHandler());
-        // E step 4: field_73013_u (difficultySetting) was never seeded, so any code path
         // reading it (e.g. a legacy mob-cap check) NPE'd on
         // EnumDifficulty.ordinal() - found by the step-3 mass-tick harness.
         UmbUnsafe.setField(w, UmbUnsafe.field(World.class, "field_73013_u"), EnumDifficulty.NORMAL);
-        // E step 4: perWorldStorage (unusually, an already-deobfuscated field name - not
         // SRG-mapped) was never seeded either, NPEing legacy saved-data helpers
         // (AnnihilatorSavedData.getData, TomSaveData.forWorld, SatelliteSavedData.getData) the
         // first time any of them ran - found by the step-3 mass-tick harness. See
         // UmbSaveHandler's javadoc for why a null-returning ISaveHandler is the honest fix.
         UmbUnsafe.setField(w, UmbUnsafe.field(World.class, "perWorldStorage"),
                 new net.minecraft.world.storage.MapStorage(new UmbSaveHandler()));
-        // E step 4, : func_72863_F/getChunkProvider (the virtual method) was
         // overridden to return UmbChunkProvider.INSTANCE, but some World-internal methods
-        // read the backing field
         // field_73020_y DIRECTLY rather than through the getter - seed it too, same instance.
         UmbUnsafe.setField(w, UmbUnsafe.field(World.class, "field_73020_y"),
                 new UmbChunkProvider(w));
-        // WorldServer field_73066_T (entityIdMap): Entity construction and removal
         // paths consult this map even though the facade does not run vanilla chunk updates.
         UmbUnsafe.setField(w, UmbUnsafe.field(WorldServer.class, "field_73066_T"),
                 new net.minecraft.util.IntHashMap());
-        // WorldServer field_73062_L backs func_73039_n (EntityTracker). Entity
         // implementations are allowed to broadcast their motion; a null tracker poisoned the
         // first real helicopter tick even though the entity had spawned successfully. The real
         // constructor requires a MinecraftServer, which this isolated universe intentionally does
@@ -194,9 +209,7 @@ public final class UmbWorld extends WorldServer {
         UmbUnsafe.setField(w, UmbUnsafe.field(World.class, "field_147482_g"), new ArrayList<TileEntity>());
         UmbUnsafe.setField(w, UmbUnsafe.field(World.class, "field_72996_f"), new ArrayList<Object>());
         UmbUnsafe.setField(w, UmbUnsafe.field(World.class, "field_73010_i"), new ArrayList<Object>());
-        // field_72998_d (collidingBoundingBoxes, fields.csv) was never
         // seeded, so the inherited World.func_72945_a (getCollidingBoundingBoxes, methods.csv -
-        // its first statement is field_72998_d.clear()) NPE'd the moment any
         // mod code ran it - MC Heli's MCH_ItemAircraft.onTileClick calls it on every placement
         // attempt. Same seed-a-vanilla-list fix as the three lines above.
         UmbUnsafe.setField(w, UmbUnsafe.field(World.class, "field_72998_d"), new ArrayList<Object>());
@@ -211,7 +224,12 @@ public final class UmbWorld extends WorldServer {
         @Override public void func_151248_b(Entity entity, net.minecraft.network.Packet packet) {}
     }
 
-/** Legacy compatibility behavior. */
+    /**
+     * String, WorldProvider, WorldSettings, Profiler)} assignments the create() above never
+     * null by design (no real saves — {@code getChunkSaveLocation} above covers tickets);
+     * the profiler/world-info/provider/storage/chunk-provider lines above are untouched.
+     * Every step logs through the host handle and continues.
+     */
     private static void seedUniverseState(UmbWorld w) {
         try {
             Class<?> world = World.class;
@@ -263,8 +281,19 @@ public final class UmbWorld extends WorldServer {
     }
 
     /**
- * {@code WorldServer.getChunkSaveLocation} (methods.csv - body: {@code ((AnvilChunkLoader) field_73059_b.field_73247_e).field_75825_d}) NPE'd inside {@code ForgeChunkManager.loadWorld} - which Forge itself calls from OUR synthetically posted {@code...
- */
+     * body: {@code ((AnvilChunkLoader) field_73059_b.field_73247_e).field_75825_d}) NPE'd
+     * inside {@code ForgeChunkManager.loadWorld} - which Forge itself calls from OUR
+     * synthetically posted {@code WorldEvent.Load} - because this facade never seeded
+     * {@code field_73059_b} (theChunkProviderServer). Seeding a REAL ChunkProviderServer
+     * would additionally enable real chunk IO against it (region files for a world whose
+     * blocks live natively), which this facade must never do - so instead this overrides
+     * {@code getChunkSaveLocation} to return a real, per-dimension directory the chunk
+     * manager can actually use for its {@code forcedchunks.dat} ticket bookkeeping (absent
+     * file = skip, exactly like a fresh vanilla world). Directory:
+     * {@code <umb.legacy.gameDir>/umb-legacy-chunks/DIM<dimensionId>/}, created on demand;
+     * when no game dir is configured the JVM temp dir backs it (still functional, just not
+     * persistent - logged once). Only the directory creation touches disk, and only here.
+     */
     private static volatile boolean chunkDirLogged;
     private static java.io.File chunkSaveLocation(int dimensionId) {
         String gameDir = System.getProperty("umb.legacy.gameDir");
@@ -382,28 +411,28 @@ public final class UmbWorld extends WorldServer {
         }
     }
 
-/** Legacy compatibility behavior. */
+    /** fields.csv/methods.csv + javap: func_72977_a reads field_73010_i directly. */
     @Override
     public EntityPlayer func_72977_a(double x, double y, double z, double distance) {
         refreshPlayers();
         return super.func_72977_a(x, y, z, distance);
     }
 
-/** Legacy compatibility behavior. */
+    /** fields.csv/methods.csv + javap: func_72846_b reads field_73010_i directly. */
     @Override
     public EntityPlayer func_72846_b(double x, double y, double z, double distance) {
         refreshPlayers();
         return super.func_72846_b(x, y, z, distance);
     }
 
-/** Legacy compatibility behavior. */
+    /** fields.csv/methods.csv + javap: func_72924_a reads field_73010_i directly. */
     @Override
     public EntityPlayer func_72924_a(String name) {
         refreshPlayers();
         return super.func_72924_a(name);
     }
 
-/** Legacy compatibility behavior. */
+    /** fields.csv/methods.csv + javap: func_152378_a reads field_73010_i directly. */
     @Override
     public EntityPlayer func_152378_a(UUID uuid) {
         refreshPlayers();
@@ -485,9 +514,11 @@ public final class UmbWorld extends WorldServer {
     }
 
     /**
- * Registers a restored entity, or returns the already-live handle with the same vanilla UUID.
- * Native chunk reload can construct a new UmbLegacyEntity while the legacy object retained across an unload is still in this universe's loadedEntityList.
- */
+     * Registers a restored entity, or returns the already-live handle with the same vanilla UUID.
+     * Native chunk reload can construct a new UmbLegacyEntity while the legacy object retained
+     * across an unload is still in this universe's loadedEntityList. Entity UUID is the vanilla
+     * from creating a second legacy object and a second host twin.
+     */
     public EntityHandleImpl trackEntityOrExisting(Entity e) {
         if (e == null) return null;
         UUID id = null;
@@ -579,7 +610,6 @@ public final class UmbWorld extends WorldServer {
                         hostLevel.prepareEntity(handle);
                     }
                     // Vanilla World.func_72866_a snapshots the render baselines at tick start,
-                    // before onUpdate ; this loop is that method's analog and
                     // did none of it, so lastTickPos stayed at its one-time seed and every
                     // camera-relative render input lagged the entity. See snapshotTickBaseline.
                     snapshotTickBaseline(entity);
@@ -587,6 +617,10 @@ public final class UmbWorld extends WorldServer {
                     float pitchBeforeTick = entity.field_70125_A;
                     entity.field_70173_aa++;
                     handle.tick();
+                    // sample of any vehicle's real seat-info state right after its own onUpdate -
+                    // exactly where updateSeatsPosition/newSeatsPos run - so a wrong/short cache
+                    // shows up across many ticks, not only at the rare moment an interact fires.
+                    LegacyInteractionDiag.tickSnapshot(entity);
                     // Mods that call the vanilla super late in their own onUpdate (MCHeli runs
                     // half its tick before Entity.func_70071_h_) clobber prevRotationYaw/Pitch
                     // mid-tick, freezing every prev/current/partialTick render interpolation
@@ -630,8 +664,18 @@ public final class UmbWorld extends WorldServer {
     }
 
     /**
- * Tick-start render-baseline snapshot: the exact five writes vanilla 1.7.10 World.func_72866_a performs before onUpdate ( against build/legacy/1.7.10-forge-srg-runtime-fields.jar: lastTickPosX/Y/Z = pos, prevRotationYaw = rotationYaw, prevRotationPitch =...
- */
+     * Tick-start render-baseline snapshot: the exact five writes vanilla 1.7.10
+     * build/legacy/1.7.10-forge-srg-runtime-fields.jar: lastTickPosX/Y/Z = pos,
+     * prevRotationYaw = rotationYaw, prevRotationPitch = rotationPitch). Per-frame render
+     * interpolation (prev + (current - prev) * partialTick, the contract every legacy
+     * renderer including MCHeli's calcRotYaw/calcRotPitch is written against) sweeps from
+     * these baselines; without this call lastTickPos stays at its one-time seed forever
+     * and every camera-relative render input lags the entity by its whole travelled path.
+     * Universal: plain field writes, no mod knowledge. Must run before handle.tick()
+     * because mods may overwrite the rotation baselines mid-tick (see the restore in
+     * tickEntities); lastTickPos is never written by entity ticks (only setPositionAndAngles
+     * teleports and NBT reads touch it), so this snapshot survives the tick intact.
+     */
     private static void snapshotTickBaseline(Entity entity) {
         entity.field_70142_S = entity.field_70165_t;
         entity.field_70137_T = entity.field_70163_u;
@@ -725,9 +769,8 @@ public final class UmbWorld extends WorldServer {
         }
     }
 
-    /**
- * field_70121_D (boundingBox) / func_72326_a (AxisAlignedBB.intersectsWith) - both , real vanilla bytecode, no facade involved on either side
- */
+    /** field_70121_D (boundingBox) / func_72326_a (AxisAlignedBB.intersectsWith) - both
+     *  javap-verified, real vanilla bytecode, no facade involved on either side. */
     private static boolean intersects(Entity e, AxisAlignedBB box) {
         AxisAlignedBB bb = e.field_70121_D;
         return bb != null && bb.func_72326_a(box);
@@ -776,7 +819,7 @@ public final class UmbWorld extends WorldServer {
         return id == null ? "minecraft:air" : id;
     }
 
-// Legacy compatibility behavior.
+    // ---- the 14 M1 members: 10 methods (the 4 fields are seeded in create()) ----
 
     /** func_147439_a - getBlock */
     @Override
@@ -909,7 +952,6 @@ public final class UmbWorld extends WorldServer {
         return "minecraft:air".equals(host.getBlockId(x, y, z));
     }
 
-    // E step 2: additional real implementations, driven by g2-facade-demand.md
 
     /** func_72863_F - getChunkProvider. The single highest-leverage fix the step-3 mass-tick
      *  harness surfaced: with NO override here at all, this fell through to WorldServer's real
@@ -994,10 +1036,9 @@ public final class UmbWorld extends WorldServer {
         return result;
     }
 
-    /**
- * func_72945_a - getCollidingBoundingBoxes.
- * Keep vanilla's block/entity collision contract, but expose the result at the entity-placement seam.
- */
+    /** func_72945_a - getCollidingBoundingBoxes. Keep vanilla's block/entity collision contract,
+     * but expose the result at the entity-placement seam. The inherited implementation is
+     * because this facade seeds field_72998_d and the always-loaded UmbChunkProvider. */
     @Override
     @SuppressWarnings("rawtypes")
     public List func_72945_a(Entity entity, AxisAlignedBB box) {
@@ -1076,10 +1117,13 @@ public final class UmbWorld extends WorldServer {
         }
     }
 
-    /**
- * func_147480_a - destroyBlock(x,y,z,dropBlock).
- * Vanilla body, (build/legacy/1.7.10-forge-srg-runtime-fields.jar): air refuses (false), otherwise the 2001 aux event fires, {@code Block.getDrops} runs when {@code dropBlock} is set, and the block is removed.
- */
+    /** func_147480_a - destroyBlock(x,y,z,dropBlock). Vanilla body, javap-verified
+     *  (build/legacy/1.7.10-forge-srg-runtime-fields.jar): air refuses (false), otherwise
+     *  the 2001 aux event fires, {@code Block.getDrops} runs when {@code dropBlock} is set,
+     *  and the block is removed. Drops cross as {@link HostWorld#dropItem} calls (one per
+     *  stack, block-center) instead of legacy EntityItems, so the host applies its own
+     *  drop rules (BLOCK_DROPS gamerule) and physics; the shared-entity double-application
+     *  class of bug (#55/#61) is avoided by never constructing the EntityItem at all. */
     @Override
     public boolean func_147480_a(int x, int y, int z, boolean dropBlock) {
         Block block = func_147439_a(x, y, z);
@@ -1154,28 +1198,36 @@ public final class UmbWorld extends WorldServer {
         host.notifyNeighbors(x, y, z);
     }
 
-/** Legacy compatibility behavior. */
+    /** func_147459_d - notifyBlocksOfNeighborChange. Upgraded from a no-op stub (M1) to real: same
+     *  "mark all 6 neighbors dirty" mapping the M1-era func_147453_f already used - the closest
+     *  honest translation of "tell my neighbors something changed" onto HostWorld's primitives. */
     @Override
     public void func_147459_d(int x, int y, int z, Block block) {
         host.notifyNeighbors(x, y, z);
     }
 
-/** Legacy compatibility behavior. */
+    /** func_147476_b - markTileEntityChunkModified. Upgraded from a no-op stub (M1) to real: the
+     *  M1 javadoc reasoned the real WorldServer body would NPE on a chunk provider this facade
+     *  never seeded - true before {@link UmbChunkProvider} existed. Now that a real (if minimal)
+     *  chunk provider exists, the honest translation of "this tile's data changed, persist it" is
+     *  the same markBlockDirty primitive func_147471_g/markBlockForUpdate already uses. */
     @Override
     public void func_147476_b(int x, int y, int z, TileEntity te) {
         host.markBlockDirty(x, y, z);
     }
 
-    /**
- * func_72864_z - isBlockIndirectlyGettingPowered.
- * PRESENTATION upgrade FROM the stub list: real, backed by the {@code HostWorld.getRedstonePower} contract addition
- */
+    /** func_72864_z - isBlockIndirectlyGettingPowered. PRESENTATION upgrade FROM the stub list:
+     *  real, backed by the {@code HostWorld.getRedstonePower} contract addition (the host answers
+     *  with 26.2's own neighbour-signal query - javap-verified on LevelReader/SignalGetter). */
     @Override
     public boolean func_72864_z(int x, int y, int z) {
         return host.getRedstonePower(x, y, z) > 0;
     }
 
-/** Legacy compatibility behavior. */
+    /** func_72876_a - createExplosion. The SRG methods.csv/javap signature returns the legacy
+     * {@link Explosion}; the host owns the actual detonation and this local record is only the
+     * return-value shape expected by callers. The single legacy flag is isSmoking: flaming is
+     * false for this overload, while block damage follows the flag exactly. */
     @Override
     public Explosion func_72876_a(net.minecraft.entity.Entity entity, double x, double y, double z,
                                    float strength, boolean isSmoking) {
@@ -1183,10 +1235,12 @@ public final class UmbWorld extends WorldServer {
         return new Explosion(this, entity, x, y, z, strength);
     }
 
-    /**
- * func_72885_a - newExplosion.
- * PRESENTATION upgrade FROM the stub list: the host now detonates a REAL native 26.2 explosion via {@code HostWorld.explode} - block damage gated on isSmoking (1.7.10's "actually destroys terrain" flag), fire on isFlaming, sound...
- */
+    /** func_72885_a - newExplosion. PRESENTATION upgrade FROM the stub list: the host now
+     *  detonates a REAL native 26.2 explosion via {@code HostWorld.explode} - block damage gated
+     *  on isSmoking (1.7.10's "actually destroys terrain" flag), fire on isFlaming, sound and
+     *  its constructor only allocates a {@code Random} and stores fields, no world I/O) for callers
+     *  that read position/strength off it; {@code doExplosionA/B} are never invoked legacy-side -
+     *  the host explosion IS the explosion, so running them here would double-apply damage. */
     @Override
     public Explosion func_72885_a(net.minecraft.entity.Entity entity, double x, double y, double z,
                                    float strength, boolean isFlaming, boolean isSmoking) {
@@ -1368,10 +1422,9 @@ public final class UmbWorld extends WorldServer {
         LegacyAuxSfx.dispatch(host, eventId, x, y, z, data);
     }
 
-    /**
- * func_72869_a - spawnParticle.
- * PRESENTATION upgrade FROM the stub list: real; (vx,vy,vz) is the single particle's MOTION in 1.7.10 semantics, which the host reproduces exactly with 26.2's sendParticles count=0 velocity mode
- */
+    /** func_72869_a - spawnParticle. PRESENTATION upgrade FROM the stub list: real; (vx,vy,vz) is
+     *  the single particle's MOTION in 1.7.10 semantics, which the host reproduces exactly with
+     *  26.2's sendParticles count=0 velocity mode (javap-verified). */
     @Override
     public void func_72869_a(String name, double x, double y, double z, double vx, double vy, double vz) {
         if (name == null) {
@@ -1385,9 +1438,28 @@ public final class UmbWorld extends WorldServer {
     // silently no-ops"; this is the entire point of the entity bridge). ----
 
     /**
- * func_72838_d - spawnEntityInWorld.
- * The legacy Entity object ALREADY EXISTS here (legacy code constructed it: "new EntityBullet(world,...)" then "world.spawnEntityInWorld(entity)") - this method does not construct anything legacy-side, it only wraps the...
- */
+     * func_72838_d - spawnEntityInWorld. The legacy Entity object ALREADY EXISTS here (legacy code
+     * constructed it: "new EntityBullet(world,...)" then "world.spawnEntityInWorld(entity)") - this
+     * method does not construct anything legacy-side, it only wraps the entity and tells the host
+     * to stand up a native twin for it. Always registers the entity into the local {@link #entities}
+     * list (so {@link #func_72872_a}/{@link #func_72839_b} see it) and returns true (matching
+     * 1.7.10 semantics: the entity object exists and lives in the world either way) - EXCEPT when
+     * a Forge listener cancels the join, which vanilla honors (cancelled && !forceSpawn -> false)
+     * and so does this method. A host that declines to twin it (no {@link HostLevel} installed, or
+     * {@link HostLevel#spawnEntity} itself returns false: e.g. the entity type is not registered
+     * yet) leaves the legacy entity ticking locally with no visible host-side representation (an
+     * honest "orphan", not a crash or a lie).
+     *
+     * <p>The {@code EntityJoinWorldEvent} post below is load-bearing, not decorative. Vanilla
+     * build/legacy/1.7.10-forge-srg-runtime-fields.jar: EVENT_BUS.post(new
+     * EntityJoinWorldEvent(entity, this)) between the player-list add and the chunk add), and
+     * vehicle mods build their child entities from it: an MCHeli aircraft has NO gunner seats
+     * until {@code MCH_EventHook.entitySpawn} answers its join with {@code createSeats}, which
+     * recursively spawns each {@code MCH_EntitySeat} through this same method (both call chains
+     * used to reproduce only the list-add and onEntityAdded parts, so no seat entity ever
+     * existed server-side (live: zero MCH_EntitySeat spawns across the whole session) and no
+     * second rider could ever board. Universal: any mod's join-time setup was equally dead.
+     */
     @Override
     public boolean func_72838_d(net.minecraft.entity.Entity entity) {
         if (entity == null) {
@@ -1406,14 +1478,12 @@ public final class UmbWorld extends WorldServer {
             }
             if (entity instanceof net.minecraft.entity.item.EntityItem) {
                 // UNIVERSAL dropped-item shortcut: vanilla Block.dropBlockAsItem
-                // and every mod drop path spawn a legacy
                 // EntityItem through this exact method, and the host has no EntityItem
                 // twin (it would tick locally forever, invisible and unpickupable). Convert
                 // to a host item entity instead; the host applies its own drop rules.
                 // Never constructs anything else, never touches the entity lists.
                 return spawnDropAsHostItem((net.minecraft.entity.item.EntityItem) entity);
             }
-            // World.spawnEntityInWorld's body also touches a real Chunk. This
             // facade has no native chunks, so reproduce its loadedEntityList/onEntityAdded part
             // directly and keep the chunk-dependent body out of the isolated universe.
             if (!field_72996_f.contains(entity)) {
@@ -1468,7 +1538,6 @@ public final class UmbWorld extends WorldServer {
         for (Object value : list) {
             if (value instanceof Entity) {
                 Entity entity = (Entity) value;
-                // Vanilla posts the join event first here too (: post; only the
                 // non-cancelled join reaches the list and onEntityAdded) - see func_72838_d.
                 if (joinCancelledByPost(postEntityJoinWorldEvent(entity), entity.field_98038_p)) {
                     host.log("ENTITY-DIAG addLoadedEntities cancelled class="
@@ -1507,8 +1576,11 @@ public final class UmbWorld extends WorldServer {
     }
 
     /**
- * Vanilla's own cancellation rule for both entity add-paths , extracted pure so it is directly unit-testable without a booted Forge loader (subscribing a listener headless needs a LaunchClassLoader, which the headless suite does not have - verified...
- */
+     * {@code cancelled && !field_98038_p -> return false}), extracted pure so it is directly
+     * unit-testable without a booted Forge loader (subscribing a listener headless needs a
+     * LaunchClassLoader, which the headless suite does not have - verified empirically, the
+     * same reason the input dispatcher's bus delivery is best-effort there).
+     */
     public static boolean joinCancelledByPost(boolean postCancelled, boolean forceSpawn) {
         return postCancelled && !forceSpawn;
     }
