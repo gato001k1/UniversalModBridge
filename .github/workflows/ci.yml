@@ -14,7 +14,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest]
+        os: [windows-latest, ubuntu-latest, macos-latest]
 
     steps:
       - name: Check out source
@@ -74,3 +74,32 @@ jobs:
         run: |
           java tools/UmbBuild.java test
           Write-Host 'LEGACY-1710-SKIP: the legacy 1.7.10 build/test targets (SRG sanitize, field repair, Forge remap, legacyside, legacy JUnit gates) were skipped because research/out/legacy/1.7.10-forge-srg-runtime.jar was not available; ci-fetch cannot download it (it is gitignored and only restored from the CI cache), and release.yml still requires it. All non-legacy gates ran: hostagent, objbridge, rendermap, guimap, legacy-1165, legacy-1122.'
+
+      - name: Upload UMB build artifacts
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: umb-build-${{ matrix.os }}
+          retention-days: 14
+          if-no-files-found: warn
+          # Only UMB's own jars. The Forge/Minecraft-derived jars that also live under build/
+          # (SRG runtime jars) and third-party repackaged libraries are never uploaded.
+          path: |
+            build/hostagent/umb-hostagent.jar
+            build/objbridge/umb-objbridge.jar
+            build/legacy/umb-bridge-api.jar
+            build/legacy/umb-legacy-api.jar
+            build/legacy/umb-legacy-boot.jar
+            build/legacy/umb-legacy-legacyside.jar
+            build/rendermap/umb-rendermap.jar
+            build/guimap/umb-guimap.jar
+            umb-legacy-1122/build/umb-legacy1122-api.jar
+            umb-legacy-1122/build/umb-legacy1122-boot.jar
+            umb-legacy-1122/build/umb-legacy1122-bridge-api.jar
+            umb-legacy-1122/build/umb-legacy1122-legacyside.jar
+            umb-legacy-1165/build/umb-legacy1165-api.jar
+            umb-legacy-1165/build/umb-legacy1165-boot.jar
+            umb-legacy-1165/build/umb-legacy1165-bridge-api.jar
+            umb-legacy-1165/build/umb-legacy1165-guigeom.jar
+            umb-legacy-1165/build/umb-legacy1165-legacyside.jar
+            umb-legacy-1165/build/umb-legacy1165-transform.jar

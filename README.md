@@ -41,18 +41,15 @@ prints into your launcher's JVM arguments. Details for each launcher are in
 
 ## Building
 
+See [BUILDING.md](BUILDING.md) for the portable JDK 25 build, test, release, and
+platform notes.
+
 ```sh
-pwsh tools/ci-fetch.ps1
-pwsh tools/build-legacy.ps1
-pwsh umb-legacy-1122/build.ps1
-pwsh umb-legacy-1165/build.ps1
-pwsh tools/build-objbridge.ps1
-pwsh tools/build-hostagent.ps1
+pwsh tools/ci-fetch.ps1   # first time: downloads Minecraft, Forge and mappings into research/ (gitignored)
+./build.sh build
 ```
 
-`ci-fetch.ps1` downloads Minecraft, Forge and the mappings into `research/` (ignored by git).
-Tests are `tools/run-tests.ps1`, `tools/run-hostagent-tests.ps1`, `tools/run-objbridge-tests.ps1`
-and the `run-tests.ps1` in the 1.12.2 and 1.16.5 folders.
+The Windows equivalent is `build.cmd build`. The wrappers also accept `test` and `release`.
 
 ## Contributing
 
