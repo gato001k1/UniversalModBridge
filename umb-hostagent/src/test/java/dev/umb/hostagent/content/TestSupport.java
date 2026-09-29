@@ -65,7 +65,7 @@ final class TestSupport {
      * in this JVM. See {@link #ensureBootstrappedWithoutFreezing()} for that case; the two are
      * mutually exclusive within one process, which is why UmbLegacyBlockTest (the only place that
      * constructs fresh UmbLegacyBlock instances) runs in its own separate java invocation --
-     * see tools/run-hostagent-tests.ps1.
+     * see tools/windows/run-hostagent-tests.ps1.
      */
     static void ensureBootstrapped() {
         if (BOOTSTRAPPED.compareAndSet(false, true)) {

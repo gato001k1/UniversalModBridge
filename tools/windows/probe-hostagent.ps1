@@ -1,7 +1,7 @@
 # Headless proof: bootstrap the REAL 26.2 registries with the agent attached and verify that
 # the 1.7.10 snapshot content is present before they freeze. No window, no GL.
-#   powershell -NoProfile -ExecutionPolicy Bypass -File tools\probe-hostagent.ps1
-#   powershell -NoProfile -ExecutionPolicy Bypass -File tools\probe-hostagent.ps1 -Namespace ironchest
+#   powershell -NoProfile -ExecutionPolicy Bypass -File tools\windows\probe-hostagent.ps1
+#   powershell -NoProfile -ExecutionPolicy Bypass -File tools\windows\probe-hostagent.ps1 -Namespace ironchest
 # Exit code 0 = PROBE-OK, 1 = PROBE-FAIL.
 #
 # UNIVERSALITY (harness-purge, headline finding 3): this used to hardcode
@@ -17,7 +17,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 
-$repo = Split-Path -Parent $PSScriptRoot
+$repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $java = Join-Path $repo 'tools\jdk-25.0.4.1+1\bin\java.exe'
 $agent = Join-Path $repo 'build\hostagent\umb-hostagent.jar'
 $launchwrapper = Join-Path $repo 'research\visual\mc1710-native\libraries\net\minecraft\launchwrapper\1.12\launchwrapper-1.12.jar'

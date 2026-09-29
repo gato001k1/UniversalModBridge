@@ -24,7 +24,43 @@ public final class LegacyCaptureTextureResolver {
     private static final Map<Identifier, String> MISSING = new ConcurrentHashMap<>();
     private static final Map<Identifier, Long> RETRY_AFTER_NANOS = new ConcurrentHashMap<>();
 
+    /** Per texture: true when some pixel is partly transparent (needs real blending). */
+    private static final Map<Identifier, Boolean> PARTIAL_ALPHA = new ConcurrentHashMap<>();
+
     private LegacyCaptureTextureResolver() { }
+
+    /**
+     * Whether a captured draw bound to {@code id} needs a blended (sorted, translucent) pass.
+     * A texture whose pixels are all either fully opaque or fully clear looks the same under
+     * cutout as under alpha blending, so legacy draws recorded with GL_BLEND on can use the
+     * cheaper cutout path (no per-frame depth sort). Unknown textures answer true, which keeps
+     * the recorded blend state.
+     */
+    public static boolean needsBlending(Identifier id) {
+        if (id == null) return true;
+        Boolean partial = PARTIAL_ALPHA.get(id);
+        return partial == null || partial.booleanValue();
+    }
+
+    /** Scans alpha once per texture; tolerant of near-binary edges (cutout threshold is 0.1). */
+    static boolean hasPartialAlpha(NativeImage image) {
+        int w = image.getWidth(), h = image.getHeight();
+        for (int y = 0; y < h; y++) {
+            for (int x = 0; x < w; x++) {
+                int a = (image.getPixel(x, y) >>> 24) & 0xFF;
+                if (a > 4 && a < 251) return true;
+            }
+        }
+        return false;
+    }
+
+    private static void noteAlpha(Identifier id, NativeImage image) {
+        try {
+            PARTIAL_ALPHA.put(id, Boolean.valueOf(hasPartialAlpha(image)));
+        } catch (Throwable ignored) {
+            // Unknown stays "needs blending": never worse than before.
+        }
+    }
 
     public static void ensure(Identifier id) {
         if (id == null || "minecraft".equals(id.getNamespace()) || REGISTERED.contains(id)) return;
@@ -50,6 +86,7 @@ public final class LegacyCaptureTextureResolver {
         }
         try (InputStream in = Files.newInputStream(source)) {
             NativeImage image = NativeImage.read(in);
+            noteAlpha(id, image);
             DynamicTexture texture = new DynamicTexture(() -> "umb-capture " + id, image);
             Minecraft.getInstance().getTextureManager().register(id, texture);
             REGISTERED.add(id);
@@ -118,6 +155,7 @@ public final class LegacyCaptureTextureResolver {
         if (bytes == null) return false;
         try (InputStream in = new java.io.ByteArrayInputStream(bytes)) {
             NativeImage image = NativeImage.read(in);
+            noteAlpha(id, image);
             DynamicTexture texture = new DynamicTexture(() -> "umb-capture " + id, image);
             Minecraft.getInstance().getTextureManager().register(id, texture);
             REGISTERED.add(id);

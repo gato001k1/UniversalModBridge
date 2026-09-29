@@ -35,7 +35,7 @@ import java.util.Map;
  * {@code HostWorldImpl}/{@code HostPlayerImpl} implement, so the real 26.2 game classpath is not
  * needed at all here; only {@code UmbUniverse} and the legacy build artifacts are.</p>
  *
- * <p>Run via {@code tools/run-hostagent-e2e-m1.ps1}, which supplies the exact legacy JVM flags
+ * <p>Run via {@code tools/windows/run-hostagent-e2e-m1.ps1}, which supplies the exact legacy JVM flags
  * (`--sun-misc-unsafe-memory-access=allow` + 8 `--add-opens`) {@link UmbUniverse#boot} checks for
  * before doing anything else. Exits 0 and prints {@code M1-OK} on success, exits 1 and prints
  * {@code M1-FAIL: <reason>} otherwise.</p>
@@ -50,7 +50,7 @@ public final class M1UniverseProbe {
         try {
             if (args.length < 1 || args[0] == null || args[0].isEmpty()) {
                 System.out.println("M1-FAIL: usage: M1UniverseProbe <scenario.json>"
-                        + " (driven with one by tools/run-hostagent-e2e-m1.ps1)");
+                        + " (driven with one by tools/windows/run-hostagent-e2e-m1.ps1)");
                 System.exit(2);
                 return;
             }
@@ -65,11 +65,9 @@ public final class M1UniverseProbe {
     }
 
     /**
-     * End-to-end scenario, read as DATA (see {@code research/out/legacy/m1-scenario-hbm.json}).
      * Every mod-specific value (block/item ids, slot layout, fuel, ticks) arrives here from
      * the file; the probe asserts only generic furnace behaviors (container opens, layout
      * matches, fuel+ticks move persisted state, a progress register goes live). The HBM
-     * values in the shipped scenario were each javap-verified when first recorded (slot
      * coordinates, NBT fields, register semantics) - that provenance lives in comments and
      * the scenario file, never as literals in this code.
      */
@@ -200,7 +198,6 @@ public final class M1UniverseProbe {
         report.append("syncData: ok, stable length=").append(syncLen).append('\n');
         byte[] nbtBefore = tile.saveNbt();
 
-        // TileEntityFurnaceBrick.canSmelt() (javap-verified) requires BOTH a valid smelting input
         // in slot 0 (net.minecraft.item.crafting.FurnaceRecipes.getSmeltingResult(slots[0]) != null
         // - vanilla iron_ore -> iron_ingot is a real vanilla recipe, R7's exact hardcoded pair) AND
         // burn time in slot 1 (net.minecraft.tileentity.TileEntityFurnace.getItemBurnTime, vanilla
@@ -219,7 +216,6 @@ public final class M1UniverseProbe {
         if (syncAfter.length != syncLen) {
             throw new IllegalStateException("syncData() length changed: " + syncLen + " -> " + syncAfter.length);
         }
-        // DEVIATION, javap-verified (not guessed): com.hbm.inventory.container.ContainerFurnaceBrick
         // does NOT override Container.detectAndSendChanges() / ICrafting progress push at all - HBM
         // syncs THIS machine's progress/burnTime to its GUI through its own custom networking
         // (com.hbm.main.NetworkHandler / PacketThreading), which DESIGN.md's Lane A step 5
@@ -227,7 +223,6 @@ public final class M1UniverseProbe {
         // MinecraftServer/ServerConfigurationManager) - so syncData() legitimately stays all-zero
         // for this specific tile, and the task brief's "ticking changes syncData()" does not hold
         // for THIS machine. What DOES observably change is the tile's own persisted state
-        // (TileEntityFurnaceBrick.writeToNBT javap-verified to serialize burnTime/maxBurnTime/
         // progress/ash levels), so that is what this gate asserts instead. syncData()'s CONTRACT
         // obligation (stable length, never throwing) is still fully exercised and asserted above.
         byte[] nbtAfter = tile.saveNbt();
@@ -245,11 +240,8 @@ public final class M1UniverseProbe {
         report.append("saveNbt/loadNbt: ok, ").append(nbtAfter.length).append(" bytes, round-tripped\n");
         handle.close();
 
-        // SYNC-BINDING lane: the syncData()-liveness proof the lead's brief demanded BEFORE any
-        // binding work - see research/out/legacy/guimap-notes/SYNC-BINDING.md. ContainerFurnaceBrick
         // above is the WRONG machine to prove this with (its Container never overrides
         // detectAndSendChanges at all - the deviation note above already caught that, independently,
-        // via javap). com.hbm.inventory.container.ContainerRtgFurnace DOES: its detectAndSendChanges
         // compares this.dualCookTime to diFurnace.dualCookTime and, on a change, calls
         // ICrafting.func_71112_a(this, 0, diFurnace.dualCookTime) - id 0, exactly the mapping
         // ContainerSyncScanner extracted from the same bytecode (both the server func_71112_a route
@@ -268,7 +260,6 @@ public final class M1UniverseProbe {
      * production path (UmbGui.openGui's crafter registration -&gt; ContainerHandleImpl.syncData()
      * -&gt; Container.func_75142_b() -&gt; ICrafting.func_71112_a -&gt; UmbPlayer.syncData()). The RTG
      * pellet item is a real fuel input this specific machine needs to make ANY progress at all
-     * (com.hbm.util.RTGUtil.updateRTGs only counts {@code ItemRTGPellet} instances, javap-verified)
      * -- naming it here is test setup for a real E2E scenario, the same convention already used for
      * {@code hbm:tile.machine_furnace_brick_off}/{@code minecraft:iron_ore} above, not production
      * binding code (which stays fully generic - see GuiProfile/ContainerSyncScanner).
@@ -419,7 +410,6 @@ public final class M1UniverseProbe {
             Arrays.fill(inventory, StackData.EMPTY);
         }
 
-        // TICK/CONTACT lane additions: a probe player is stationary and unhurtable.
         @Override
         public double getMotionX() {
             return 0.0D;

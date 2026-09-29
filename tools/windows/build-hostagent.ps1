@@ -1,7 +1,7 @@
 # Build umb-hostagent: the -javaagent that materialises 1.7.10 snapshot content as native
 # Minecraft 26.2 blocks/items/tabs, plus dev.umb.packgen.PackGen.
 #
-#   powershell -NoProfile -ExecutionPolicy Bypass -File tools\build-hostagent.ps1
+#   powershell -NoProfile -ExecutionPolicy Bypass -File tools\windows\build-hostagent.ps1
 #
 # Compiles on JDK 25 ONLY (research\jars\26.2\client.jar is classfile major 69).
 # gson is compiled against the EXACT jar that is on the game classpath.
@@ -10,7 +10,7 @@
 # their org.objectweb.asm package (bundled, not relocated).
 $ErrorActionPreference = 'Stop'
 
-$repo = Split-Path -Parent $PSScriptRoot
+$repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $jdk25 = Join-Path $repo 'tools\jdk-25.0.4.1+1\bin'
 $jdk21 = Join-Path $repo 'tools\jdk-21.0.12.1+1\bin'
 $javac = Join-Path $jdk25 'javac.exe'
@@ -38,7 +38,7 @@ if (-not (Test-Path $canonicalApiDir)) { Write-Error ("missing canonical umb-bri
 New-Item -ItemType Directory -Force $mirrorApiDir | Out-Null
 $mirrorHeader = @(
   '// MIRROR of the canonical umb-bridge-api owned by Lane A (umb-legacy) -- do not hand-edit.',
-  '// Synced verbatim by tools/build-hostagent.ps1 from',
+  '// Synced verbatim by tools/windows/build-hostagent.ps1 from',
   '// umb-legacy/src/bridge-api/java/dev/umb/bridge/api/ on every build. If you need to change the',
   '// boundary contract, change it there (and change BOTH sides together per DESIGN.md).',
   ''
@@ -99,9 +99,9 @@ $launchwrapperJar = Join-Path $libsDir 'net\minecraft\launchwrapper\1.12\launchw
 $joptJar = (Get-ChildItem -Recurse -Filter 'jopt-simple-*.jar' $libsDir | Select-Object -First 1).FullName
 $tier1Jars = @($umbLegacyBootJar, $umbLegacyApiJar, $launchwrapperJar, $joptJar)
 foreach ($j in $tier1Jars) {
-  if (-not $j -or -not (Test-Path $j)) { Write-Error ("missing tier-1 jar (run tools\build-legacy.ps1 first): " + $j); exit 1 }
+  if (-not $j -or -not (Test-Path $j)) { Write-Error ("missing tier-1 jar (run tools\windows\build-legacy.ps1 first): " + $j); exit 1 }
 }
-if (-not (Test-Path $umbBridgeApiCanonicalJar)) { Write-Error ("missing canonical jar (run tools\build-legacy.ps1 first): " + $umbBridgeApiCanonicalJar); exit 1 }
+if (-not (Test-Path $umbBridgeApiCanonicalJar)) { Write-Error ("missing canonical jar (run tools\windows\build-legacy.ps1 first): " + $umbBridgeApiCanonicalJar); exit 1 }
 
 if (Test-Path $classes) { Remove-Item -Recurse -Force $classes }
 if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }

@@ -81,6 +81,11 @@ public final class ClientSrgifier {
                     name = remapper.map(reader.getClassName()) + ".class";
                     bytes = writer.toByteArray();
                     if (patcher != null) bytes = patcher.applyPost(name.substring(0, name.length() - 6), bytes);
+                    // A LaunchWrapper DEBUG_SAVE capture exposes the transformed Minecraft
+                    // surface to the legacy side. Reproduce that boundary for cold builds:
+                    // Forge/legacy sources must be able to link against transformed vanilla
+                    // classes without depending on a machine-local captured runtime.
+                    bytes = widenRuntimeAccess(bytes);
                 }
                 if (!written.add(name)) continue;
                 JarEntry copy = new JarEntry(name);
@@ -90,6 +95,19 @@ public final class ClientSrgifier {
                 out.closeEntry();
             }
         }
+    }
+
+    private static byte[] widenRuntimeAccess(byte[] bytes) {
+        org.objectweb.asm.tree.ClassNode node = new org.objectweb.asm.tree.ClassNode(org.objectweb.asm.Opcodes.ASM9);
+        new ClassReader(bytes).accept(node, 0);
+        node.access = publicAccess(node.access);
+        for (org.objectweb.asm.tree.FieldNode field : node.fields) field.access = publicAccess(field.access);
+        for (org.objectweb.asm.tree.MethodNode method : node.methods) if (method.name.equals("<init>")) method.access = publicAccess(method.access);
+        ClassWriter writer = new ClassWriter(0); node.accept(writer); return writer.toByteArray();
+    }
+
+    private static int publicAccess(int access) {
+        return (access & ~(org.objectweb.asm.Opcodes.ACC_PRIVATE | org.objectweb.asm.Opcodes.ACC_PROTECTED)) | org.objectweb.asm.Opcodes.ACC_PUBLIC;
     }
 
     private static final class Patcher {

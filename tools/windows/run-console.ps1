@@ -1,6 +1,6 @@
 # Start the umb-console web UI (and optionally open it in the default browser).
 #
-#   powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-console.ps1 [-Port 8765] [-Open]
+#   powershell -NoProfile -ExecutionPolicy Bypass -File tools\windows\run-console.ps1 [-Port 8765] [-Open]
 #                                                                            [-Background] [-Stop]
 #
 # Binds 127.0.0.1 ONLY. -Xmx128m: RAM on this box is tight and three other lanes may be running a
@@ -15,7 +15,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 
-$repo = Split-Path -Parent $PSScriptRoot
+$repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $java = Join-Path $repo 'tools\jdk-21.0.12.1+1\bin\java.exe'
 $jarFile = Join-Path $repo 'build\console\umb-console.jar'
 $gson = Join-Path $repo 'tools\junit\gson.jar'

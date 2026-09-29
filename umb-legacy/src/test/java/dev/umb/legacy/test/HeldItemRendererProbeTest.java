@@ -16,10 +16,11 @@ import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 
 /**
- * Runs the M1Probe scenario (real FML boot, real staged HBM mod) through
- * {@code dev.umb.legacy.boot.M1ProbeMain} as a separate JVM subprocess, pointed at
- * freshly built jars via the {@code -Dumb.legacy.testProbeRepo} override, so M1Probe's
- * {@code LegacyRenderCapture.hasItemRenderer} assertions run against current code.
+ * (real FML boot, real staged HBM mod, exactly {@link M1ProbeTest}'s own scenario) through
+ * scratch-rebuilt jars via the same {@code -Dumb.legacy.testProbeRepo} override
+ * {@code RenderTickHudCaptureProbeTest} introduced, so M1Probe's new
+ * {@code LegacyRenderCapture.hasItemRenderer} assertions run against the fix, not the stale
+ * shared {@code build/legacy/umb-legacy-legacyside.jar}.
  */
 class HeldItemRendererProbeTest {
 
@@ -56,7 +57,7 @@ class HeldItemRendererProbeTest {
 
         for (String p : new String[] {java25, bootJar, apiJar, bridgeApiJar, lsJar, forgeSrg, runtimeJar,
                 lwJar, joptJar, log4jApi, log4jCore, log4jCfg}) {
-            assertTrue(new File(p).exists(), "missing: " + p + " - run tools/build-legacy.ps1 first");
+            assertTrue(new File(p).exists(), "missing: " + p + " - run tools/windows/build-legacy.ps1 first");
         }
 
         String hostCp = String.join(File.pathSeparator, bootJar, apiJar, bridgeApiJar, lwJar, joptJar,

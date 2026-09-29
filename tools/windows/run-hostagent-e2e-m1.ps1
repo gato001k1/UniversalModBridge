@@ -5,20 +5,20 @@
 # drives the Brick Furnace scenario against in-memory Fake HostWorld/HostPlayer (no ServerLevel
 # needed - see the probe's own javadoc for why that is enough to prove the embedding).
 #
-#   powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-hostagent-e2e-m1.ps1 [-TimeoutSec 120] [-Scenario <path>]
+#   powershell -NoProfile -ExecutionPolicy Bypass -File tools\windows\run-hostagent-e2e-m1.ps1 [-TimeoutSec 120] [-Scenario <path>]
 #
 # -Scenario points at the mod-specific end-to-end scenario the probe drives
 # (default research/out/legacy/m1-scenario-hbm.json - block/item ids, slot layout,
 # fuel and ticks for the furnace + RTG liveness proofs). The probe Java itself takes
 # the scenario path as its only argument and names no mod.
 #
-# Same legacy JVM-flag discipline as tools\run-legacy-m1-probe.ps1 (this is what UmbUniverse.boot()
+# Same legacy JVM-flag discipline as tools\windows\run-legacy-m1-probe.ps1 (this is what UmbUniverse.boot()
 # itself checks for before doing anything else, and fails loudly - not obscurely - if missing).
 # Separate JVM from anything else that boots FML's Loader singleton (never share a process with
-# tools\run-legacy-boot.ps1 / tools\run-legacy-m1-probe.ps1 / umb-legacy's own JUnit gate).
+# tools\windows\run-legacy-boot.ps1 / tools\windows\run-legacy-m1-probe.ps1 / umb-legacy's own JUnit gate).
 $ErrorActionPreference = 'Stop'
 
-$repo   = Split-Path -Parent $PSScriptRoot
+$repo   = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $java   = Join-Path $repo 'tools\jdk-25.0.4.1+1\bin\java.exe'
 $classes = Join-Path $repo 'build\hostagent\classes'
 $outDir = Join-Path $repo 'research\out\legacy\g2-integration'
@@ -34,7 +34,7 @@ $joptJar = (Get-ChildItem -Recurse -Filter 'jopt-simple-*.jar' $libsDir | Select
 $gsonJar = Join-Path $repo 'research\jars\26.2\libraries\com\google\code\gson\gson\2.14.0\gson-2.14.0.jar'
 
 foreach ($p in @($java, $classes, $umbLegacyBootJar, $umbLegacyApiJar, $launchwrapperJar, $joptJar, $gsonJar)) {
-  if (-not $p -or -not (Test-Path $p)) { Write-Error ("missing: " + $p + " - run tools\build-hostagent.ps1 and tools\build-legacy.ps1 first"); exit 1 }
+  if (-not $p -or -not (Test-Path $p)) { Write-Error ("missing: " + $p + " - run tools\windows\build-hostagent.ps1 and tools\windows\build-legacy.ps1 first"); exit 1 }
 }
 
 $timeoutSec = 120

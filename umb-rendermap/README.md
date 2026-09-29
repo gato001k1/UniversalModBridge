@@ -13,9 +13,9 @@ indirection without naming a particular mod.
 ## Build and test
 
 ```powershell
-tools\build-rendermap.ps1
-tools\run-rendermap-tests.ps1
-tools\run-rendermap.ps1 -Jar path\to\mod.jar -Snapshot path\to\snapshot.json -OutDir path\to\out
+tools\windows\build-rendermap.ps1
+tools\windows\run-rendermap-tests.ps1
+tools\windows\run-rendermap.ps1 -Jar path\to\mod.jar -Snapshot path\to\snapshot.json -OutDir path\to\out
 ```
 
 The command writes a namespace-specific JSON render map and a report. Add

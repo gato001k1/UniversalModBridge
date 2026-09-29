@@ -16,8 +16,24 @@ import org.junit.jupiter.api.Test;
 import dev.umb.legacy.boot.LegacyLoader;
 
 /**
- * regression tests: every Forge event type the bridge posts or mods subscribe must be constructible through the public no-arg constructor {@code EventBus.register} uses ({@code Class.getConstructor().newInstance()}, in the SRG jar).
- * <p>Root cause they guard...
+ * subscribe must be constructible through the public no-arg constructor
+ * {@code EventBus.register} uses ({@code Class.getConstructor().newInstance()},
+ * bytecode-verified in the SRG jar).
+ *
+ * <p>Root cause they guard (proven with a recording transformer on a real HBM boot):
+ * linking {@code LegacyBridgeImpl} - which happens at the very first
+ * {@code new LegacyBridgeImpl()}, BEFORE {@code LegacyDriver.boot} registers any
+ * {@code IClassTransformer} - makes the JVM verify ALL of its methods, and verification
+ * loads every event type named in ANY method body ({@code WorldEvent$Load},
+ * {@code EntityJoinWorldEvent} here). Those parents were therefore defined without
+ * {@code EventSubscriptionTransformer} ever seeing them, so they never got the
+ * Forge-standard {@code ()V}; every later registration on their subclasses dropped its
+ * handlers (107 in one live run). The fix keeps every event reference out of
+ * pre-registration-linked classes (see {@code LegacyEventPoster}) so Forge's own
+ * transformer instruments the whole tree, and deletes the hand-picked
+ * {@code UmbEventTransformer} whose {@code PlayerEvent} patch called a PRIVATE super
+ * constructor. Forge's transformer is sufficient on its own: {@code buildEvents} loads
+ * each superclass through the transformer chain, and the base {@code Event} already
  */
 class LegacyEventNoArgCtorTest {
 
@@ -133,7 +149,7 @@ class LegacyEventNoArgCtorTest {
         File asm = new File(repo,
                 "research/visual/mc1710-native/libraries/org/ow2/asm/asm-all/5.0.3/asm-all-5.0.3.jar");
         for (File f : new File[]{legacyside, forgeSrg, runtime, guava, asm}) {
-            assertTrue(f.isFile(), "missing: " + f + " - run tools/build-legacy.ps1 first");
+            assertTrue(f.isFile(), "missing: " + f + " - run tools/windows/build-legacy.ps1 first");
         }
         List<URL> urls = new ArrayList<URL>();
         for (File f : new File[]{legacyside, forgeSrg, runtime, guava, asm}) {

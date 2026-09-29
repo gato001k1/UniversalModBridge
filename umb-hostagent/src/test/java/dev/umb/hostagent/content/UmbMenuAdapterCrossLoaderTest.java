@@ -41,7 +41,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * {@link TestSupport#ensureBootstrapped()} runs the real {@code Bootstrap.bootStrap()}, which
  * calls {@code BuiltInRegistries.freeze()}, which (ONLY because this test runs with the real
  * {@code dev.umb.hostagent.HostAgent} attached as a {@code -javaagent} -- see
- * {@code tools/run-hostagent-tests.ps1}'s dedicated third invocation for this class) has been
+ * {@code tools/windows/run-hostagent-tests.ps1}'s dedicated third invocation for this class) has been
  * bytecode-spliced to call {@link Hooks#beforeFreeze()} first, which calls
  * {@code Registrar.registerLegacyTileAndMenu}, which calls the real
  * {@link UmbMenuRegistration#registerMenuType} / {@link UmbMenuRegistration#registerScreen} --

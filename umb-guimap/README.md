@@ -11,9 +11,9 @@ The host agent uses the map to connect a legacy `GuiScreen` and container to a
 ## Build and test
 
 ```powershell
-tools\build-guimap.ps1
-tools\run-guimap-tests.ps1
-tools\run-guimap.ps1 -Jar path\to\mod.jar -Snapshot path\to\snapshot.json
+tools\windows\build-guimap.ps1
+tools\windows\run-guimap-tests.ps1
+tools\windows\run-guimap.ps1 -Jar path\to\mod.jar -Snapshot path\to\snapshot.json
 ```
 
 The analyzer writes a namespace-specific GUI map and a report to the selected

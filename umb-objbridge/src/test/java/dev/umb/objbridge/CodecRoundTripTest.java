@@ -24,7 +24,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * The {@code umb:obj} codec, round-tripped through {@code JsonOps} on its own (the full dispatch
  * through {@code ItemModels.CODEC} needs {@code ItemModels.bootstrap()} to have run under the agent -
- * that is what {@code tools/probe-objbridge.ps1} proves).
+ * that is what {@code tools/windows/probe-objbridge.ps1} proves).
  */
 class CodecRoundTripTest {
 

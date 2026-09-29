@@ -20,6 +20,8 @@ public final class UmbBridgeHost {
 
     private static volatile LegacyBridge bridge;
     private static final AtomicBoolean bootAttempted = new AtomicBoolean(false);
+    /** What the universe keeps from boot; follows the integrated server across world reloads. */
+    private static volatile LiveHostWorld live;
 
     private UmbBridgeHost() {
     }
@@ -41,6 +43,8 @@ public final class UmbBridgeHost {
     public static boolean ensureBooted(HostWorld world) {
         LegacyBridge b = bridge;
         if (b == null) return false;
+        LiveHostWorld l = live;
+        if (l != null) l.observe(world);
         try {
             if (b.isBooted()) return true;
         } catch (Throwable t) {
@@ -59,7 +63,12 @@ public final class UmbBridgeHost {
         }
         long t0 = System.nanoTime();
         try {
-            b.boot(world);
+            HostWorld bootWorld = world;
+            if (world instanceof HostWorldImpl impl) {
+                live = new LiveHostWorld(impl);
+                bootWorld = live;
+            }
+            b.boot(bootWorld);
             long ms = (System.nanoTime() - t0) / 1_000_000L;
             AgentLog.loud("UMB-BRIDGE universe booted in " + ms + " ms");
             return true;
@@ -73,6 +82,7 @@ public final class UmbBridgeHost {
     /** For tests: forget the bridge and boot state so a fresh test can install its own fake. */
     public static void resetForTests() {
         bridge = null;
+        live = null;
         bootAttempted.set(false);
     }
 }

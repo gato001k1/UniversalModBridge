@@ -19,7 +19,7 @@
 #       The two we do need (Fluid.getIcon, Fluid.getBlock) go through Refl.
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
-. ..\..\tools\umb-env.ps1
+. ..\..\tools\windows\umb-env.ps1
 
 $root = (Resolve-Path ..\..).Path
 $javac = Join-Path $env:JAVA_HOME 'bin\javac.exe'

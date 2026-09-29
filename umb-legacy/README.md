@@ -13,8 +13,8 @@ in a second world.
 ## Build and test
 
 ```powershell
-tools\build-legacy.ps1
-tools\run-tests.ps1
+tools\windows\build-legacy.ps1
+tools\windows\run-tests.ps1
 ```
 
 The build expects the Forge and Minecraft libraries prepared by

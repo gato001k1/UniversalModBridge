@@ -9,7 +9,7 @@
 # so a leak is visible in the build log.
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
-. ..\..\tools\umb-env.ps1
+. ..\..\tools\windows\umb-env.ps1
 
 $javac = Join-Path $env:JAVA_HOME 'bin\javac.exe'
 $jar = Join-Path $env:JAVA_HOME 'bin\jar.exe'

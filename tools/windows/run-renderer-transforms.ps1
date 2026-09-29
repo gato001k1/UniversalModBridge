@@ -3,7 +3,7 @@
   Extract OpenGL transform constants from legacy renderer bytecode.
   Reads hbm-render-map.json to find renderer classes, then disassembles each one
   to capture glScale/glTranslate/glRotate constant argument values.
-    .\tools\run-renderer-transforms.ps1 [-Jar <path>] [-Rendermap <path>] [-OutDir <path>]
+    .\tools\windows\run-renderer-transforms.ps1 [-Jar <path>] [-Rendermap <path>] [-OutDir <path>]
 
   UNIVERSALITY (harness-purge, finding 9): this was the only one of its sibling scripts
   (run-rendermap.ps1 / run-guimap.ps1 both already take -Jar) with no override parameter for the
@@ -17,7 +17,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 
-$root    = Split-Path -Parent $PSScriptRoot
+$root    = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $java    = Join-Path $root 'tools\jdk-21.0.12.1+1\bin\java.exe'
 $libDir  = Join-Path $root 'tools\junit'
 $mainOut = Join-Path $root 'build\rendermap\classes'

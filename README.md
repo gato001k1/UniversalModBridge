@@ -32,24 +32,50 @@ Longer explanation in [docs/how-it-works.md](docs/how-it-works.md).
 
 ## Installing
 
-You need Java 25 (a JDK), Minecraft 26.2 in a launcher that lets you set JVM arguments, and
-your own copies of the mods. Nothing from Minecraft, Forge or the mods is included here.
+You don't need to build anything. You need:
 
-Run the installer, point it at your instance and your mods folder, and paste the line it
-prints into your launcher's JVM arguments. Details for each launcher are in
-[docs/INSTALL.md](docs/INSTALL.md).
+- Minecraft Java Edition 26.2, in a launcher that lets you set JVM arguments (the official
+  launcher, Prism/MultiMC, Modrinth App...).
+- Java 25 (a JDK). Check with `java -version`; it has to say 25.
+- Your own copies of the old mods, unchanged, in one folder. Nothing from Minecraft, Forge or
+  the mods is included here.
+
+Steps:
+
+1. Download the zip from the [latest release](https://github.com/gato001k1/UniversalModBridge/releases/latest)
+   (or the `nightly` pre-release for the newest build) and unzip it.
+2. Put your old mod jars (1.7.10, 1.12.2 or 1.16.5 Forge mods) in a folder of their own, for
+   example `~/Games/UMB/mods` on Linux/macOS or `C:\Games\UMB\mods` on Windows. Don't put the
+   UMB jars or Forge in there.
+3. Run the installer from the unzipped folder, pointing it at your 26.2 instance and that mods
+   folder:
+
+   ```sh
+   java -jar umb-installer.jar --minecraft "PATH_TO_YOUR_26.2_INSTANCE" --mods "PATH_TO_YOUR_MOD_FOLDER"
+   ```
+
+   The first run downloads and checks the official Minecraft/Forge files it needs, so it takes
+   a while.
+4. Copy the JVM arguments line it prints (also saved in `<instance>/umb/jvm-arguments.txt`)
+   into your launcher's JVM arguments for that instance.
+5. Start the game.
+
+`java -jar umb-installer.jar --minecraft "PATH_TO_YOUR_26.2_INSTANCE" --check` checks an
+existing install and tells you what to fix. Where each launcher keeps its JVM arguments, and
+common errors, are in [docs/INSTALL.md](docs/INSTALL.md).
 
 ## Building
 
-See [BUILDING.md](BUILDING.md) for the portable JDK 25 build, test, release, and
-platform notes.
+See [BUILDING.md](BUILDING.md). Short version, on Linux, macOS or Windows with JDK 25:
 
 ```sh
-pwsh tools/ci-fetch.ps1   # first time: downloads Minecraft, Forge and mappings into research/ (gitignored)
+./build.sh fetch     # first time: downloads Minecraft, Forge and mappings (build.cmd on Windows)
 ./build.sh build
+./build.sh release   # dist/umb-<version>.zip with the installer
 ```
 
-The Windows equivalent is `build.cmd build`. The wrappers also accept `test` and `release`.
+The build downloads what it's missing by itself. The PowerShell scripts in `tools/windows/`
+are optional Windows developer helpers; you don't need them to build or install.
 
 ## Contributing
 

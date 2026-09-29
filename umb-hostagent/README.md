@@ -14,8 +14,8 @@ metadata.
 ## Build and test
 
 ```powershell
-tools\build-hostagent.ps1
-tools\run-hostagent-tests.ps1
+tools\windows\build-hostagent.ps1
+tools\windows\run-hostagent-tests.ps1
 ```
 
 The build creates `build\hostagent\umb-hostagent.jar`. Pass it as a Java agent

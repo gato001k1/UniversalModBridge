@@ -40,7 +40,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * (javap-verified, same shape as {@code Block}'s), but every fixture here is built with
  * {@code TestSupport.allocate(UmbLegacyItem.class)} (Unsafe, no constructor runs at all) plus
  * reflection to seed the two private fields {@code record}/{@code legacyId} directly - so this runs
- * fine under the REAL frozen bootstrap {@code tools/run-hostagent-tests.ps1} already uses for every
+ * fine under the REAL frozen bootstrap {@code tools/windows/run-hostagent-tests.ps1} already uses for every
  * other test class, with no test-runner changes needed.
  */
 class UmbLegacyItemTest {

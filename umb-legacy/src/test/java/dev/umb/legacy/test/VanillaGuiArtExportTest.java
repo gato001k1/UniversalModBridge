@@ -27,7 +27,7 @@ import dev.umb.legacy.legacyside.LegacyClientFacade;
  *
  * <p>This reproduces the real export path end to end (no mocking): {@code exportVanillaGuiArt}
  * reads straight from {@code research/jars/1.7.10/client.jar} (found via {@code umb.repo}, same
- * property {@code tools/build-legacy.ps1} passes when it runs this suite, with a {@code user.dir}
+ * property {@code tools/windows/build-legacy.ps1} passes when it runs this suite, with a {@code user.dir}
  * fallback for other invocations), so a real regression in the file list, the jar lookup, or the
  * gameDir the files land under fails this test the same way it fails live.</p>
  */

@@ -17,7 +17,7 @@ import static org.junit.jupiter.api.Assertions.*;
  * model/texture paths must exist on disk under {@code research/out/legacy/hbm-assets}. Self-skips
  * if the file has not been generated in this checkout (same pattern as
  * {@code TexturePickTest} in umb-objbridge), so it never fails a build that has not run
- * {@code tools/run-rendermap.ps1} yet.
+ * {@code tools/windows/run-rendermap.ps1} yet.
  */
 class RenderMapSchemaTest {
 

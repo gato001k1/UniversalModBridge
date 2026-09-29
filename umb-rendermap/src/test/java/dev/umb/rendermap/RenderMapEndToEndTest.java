@@ -21,7 +21,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * Full-pipeline smoke tests: writes a real, tiny jar + snapshot to disk and runs
- * {@code RenderMap.main} exactly the way {@code tools/run-rendermap.ps1} would, for a mod whose
+ * {@code RenderMap.main} exactly the way {@code tools/windows/run-rendermap.ps1} would, for a mod whose
  * classes and package are nothing like HBM's. Covers the mandate's explicit "a mod with NO custom
  * renderers at all must produce a valid empty-ish map, not crash" requirement, and — as the
  * positive counterpart — a mod that DOES use the generic APIs, proving id attribution and renderer

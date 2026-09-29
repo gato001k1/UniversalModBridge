@@ -276,7 +276,8 @@ public final class LegacyEntityRenderer extends EntityRenderer<Entity, LegacyEnt
                 // GL_BLEND on were alpha-blended in 1.7.10 (canopy glass): a cutout type would
                 // draw every partly transparent texel opaque and wall the pilot in.
                 boolean cull = fields.cull != null && fields.cull.getBoolean(draw);
-                boolean blend = fields.blend != null && fields.blend.getBoolean(draw);
+                boolean blend = fields.blend != null && fields.blend.getBoolean(draw)
+                        && LegacyCaptureTextureResolver.needsBlending(binding.id);
                 boolean lit = fields.lighting == null || fields.lighting.getBoolean(draw);
                 if (blend) blendedDraws++;
                 if (!lit) unlitDraws++;

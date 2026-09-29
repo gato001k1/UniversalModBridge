@@ -1,6 +1,15 @@
-# Installing
+# UMB installation — one command
 
 Download the release zip, install Java 25, and keep your own legacy mod jars in a separate folder. UMB downloads and verifies the official runtime inputs, then generates snapshots, assets, render maps, packs, and manifests locally. No repository checkout is needed.
+
+## Five steps
+
+1. Install Java 25 from [Adoptium](https://adoptium.net/temurin/releases/?version=25).
+2. Check it with `java -version`.
+3. Download the [latest release](https://github.com/gato001k1/UniversalModBridge/releases/latest).
+4. Put the original mod jars you own in a separate `mods` folder. Tested layouts include
+   HBM/MC Heli for 1.7.10 and IronChest for 1.16.5; keep Minecraft, Forge, and UMB jars out.
+5. Run the installer below, then paste its printed JVM line into your launcher.
 
 ## Requirements
 

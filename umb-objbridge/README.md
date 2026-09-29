@@ -12,14 +12,14 @@ OBJ-based visuals.
 ## Build and test
 
 ```powershell
-tools\build-objbridge.ps1
-tools\run-objbridge-tests.ps1
-tools\probe-objbridge.ps1
+tools\windows\build-objbridge.ps1
+tools\windows\run-objbridge-tests.ps1
+tools\windows\probe-objbridge.ps1
 ```
 
 For a model pack, run `ObjPackGen` with a render map, snapshot, asset directory,
 and output directory. The command-line options are shown by the generator and
-in `tools\probe-objbridge.ps1`. A windowed development launch is available via
+in `tools\windows\probe-objbridge.ps1`. A windowed development launch is available via
 `umb-objbridge\dev\launch-obj.ps1`.
 
 ## Key classes

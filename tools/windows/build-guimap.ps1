@@ -2,7 +2,7 @@
 # Build the umb-guimap module with the portable JDK 21 (never the system JAVA_HOME).
 $ErrorActionPreference = 'Stop'
 
-$root    = Split-Path -Parent $PSScriptRoot
+$root    = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $javac   = Join-Path $root 'tools\jdk-21.0.12.1+1\bin\javac.exe'
 $libDir  = Join-Path $root 'tools\junit'
 $srcDir  = Join-Path $root 'umb-guimap\src\main\java'

@@ -39,7 +39,6 @@ import java.util.regex.Pattern;
  * </pre>
  *
  * <p>Binds 127.0.0.1 ONLY, runs one pipeline job at a time, and serves files exclusively out of
- * {@code research/out/legacy} through {@link SafeFiles}. Plain JDK: {@code com.sun.net.httpserver}
  * plus Gson; no framework, no build tool.
  */
 public final class ConsoleServer {
@@ -68,11 +67,11 @@ public final class ConsoleServer {
         this.jobs = new Jobs(this.repo);
         this.slot = new Slot(this.repo);
         for (Map.Entry<String, String> e : Map.of(
-                "hostagent", "tools/run-hostagent-tests.ps1",
-                "rendermap", "tools/run-rendermap-tests.ps1",
-                "objbridge", "tools/run-objbridge-tests.ps1",
-                "legacy", "tools/run-legacy-tests.ps1",
-                "console", "tools/run-console-tests.ps1").entrySet()) {
+                "hostagent", "tools/windows/run-hostagent-tests.ps1",
+                "rendermap", "tools/windows/run-rendermap-tests.ps1",
+                "objbridge", "tools/windows/run-objbridge-tests.ps1",
+                "legacy", "tools/windows/run-legacy-tests.ps1",
+                "console", "tools/windows/run-console-tests.ps1").entrySet()) {
             Path p = this.repo.resolve(e.getValue());
             if (Files.isRegularFile(p)) gates.put(e.getKey(), p);
         }

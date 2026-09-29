@@ -9,16 +9,16 @@
   round-trip verify, GetSystemMetrics for screen size).
 
 USAGE
-  powershell -NoProfile -ExecutionPolicy Bypass -File tools\probe-driver.ps1 -Screenshot <out.png> ["partial window title"]
-  powershell -NoProfile -ExecutionPolicy Bypass -File tools\probe-driver.ps1 -Screenshot <out.png> -WindowTitle "partial title"
-  powershell -NoProfile -ExecutionPolicy Bypass -File tools\probe-driver.ps1 -MoveMouse <x> <y>
-  powershell -NoProfile -ExecutionPolicy Bypass -File tools\probe-driver.ps1 -MoveMouse -X <x> -Y <y>
-  powershell -NoProfile -ExecutionPolicy Bypass -File tools\probe-driver.ps1 -Click [left|right|middle]
-  powershell -NoProfile -ExecutionPolicy Bypass -File tools\probe-driver.ps1 -Key <keyname>
-  powershell -NoProfile -ExecutionPolicy Bypass -File tools\probe-driver.ps1 -GetCursor
-  powershell -NoProfile -ExecutionPolicy Bypass -File tools\probe-driver.ps1 -WindowRect "<partial title>"
-  powershell -NoProfile -ExecutionPolicy Bypass -File tools\probe-driver.ps1 -ListWindows
-  powershell -NoProfile -ExecutionPolicy Bypass -File tools\probe-driver.ps1 -ScreenSize
+  powershell -NoProfile -ExecutionPolicy Bypass -File tools\windows\probe-driver.ps1 -Screenshot <out.png> ["partial window title"]
+  powershell -NoProfile -ExecutionPolicy Bypass -File tools\windows\probe-driver.ps1 -Screenshot <out.png> -WindowTitle "partial title"
+  powershell -NoProfile -ExecutionPolicy Bypass -File tools\windows\probe-driver.ps1 -MoveMouse <x> <y>
+  powershell -NoProfile -ExecutionPolicy Bypass -File tools\windows\probe-driver.ps1 -MoveMouse -X <x> -Y <y>
+  powershell -NoProfile -ExecutionPolicy Bypass -File tools\windows\probe-driver.ps1 -Click [left|right|middle]
+  powershell -NoProfile -ExecutionPolicy Bypass -File tools\windows\probe-driver.ps1 -Key <keyname>
+  powershell -NoProfile -ExecutionPolicy Bypass -File tools\windows\probe-driver.ps1 -GetCursor
+  powershell -NoProfile -ExecutionPolicy Bypass -File tools\windows\probe-driver.ps1 -WindowRect "<partial title>"
+  powershell -NoProfile -ExecutionPolicy Bypass -File tools\windows\probe-driver.ps1 -ListWindows
+  powershell -NoProfile -ExecutionPolicy Bypass -File tools\windows\probe-driver.ps1 -ScreenSize
 
   Key names: Enter, Tab, Esc/Escape, Space, Backspace, Delete, Insert, Home,
   End, PageUp/PageDown, Up/Down/Left/Right, Shift, Ctrl, Alt, LWin, RWin,

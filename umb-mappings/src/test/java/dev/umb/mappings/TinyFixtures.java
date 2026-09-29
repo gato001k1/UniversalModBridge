@@ -9,7 +9,7 @@ import java.nio.file.Paths;
 /**
  * Locates the checked-in tiny v2 fixtures and materializes ad-hoc snippets
  * into scratch files for malformed-input cases. The test harness runs JUnit
- * straight off a classes directory (tools/run-tests.ps1) with no resource
+ * straight off a classes directory (tools/windows/run-tests.ps1) with no resource
  * copying, so classpath lookups cannot find src/test/resources — instead the
  * module root is found by searching upward from the working directory, which
  * works from any ancestor of the repo.

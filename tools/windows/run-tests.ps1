@@ -1,5 +1,5 @@
 # Low-memory test loop: bypasses Gradle (daemon+worker ~1.4GB commit) with a single
-# javac+JUnit JVM (~300MB). Usage: .\tools\run-tests.ps1 -Module umb-cache [-Xmx 256m]
+# javac+JUnit JVM (~300MB). Usage: .\tools\windows\run-tests.ps1 -Module umb-cache [-Xmx 256m]
 #
 # Module dependency graph (compile classpath is assembled from the prebuilt classes dirs
 # of upstream modules, matching the Gradle project deps):
@@ -15,8 +15,8 @@ param(
     [string]$Xmx = '160m'
 )
 $ErrorActionPreference = 'Stop'
-Set-Location (Split-Path -Parent $PSScriptRoot)
-. .\tools\umb-env.ps1
+Set-Location (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
+. .\tools\windows\umb-env.ps1
 
 $jdk = Join-Path $env:JAVA_HOME 'bin'
 $out = Join-Path $env:TEMP "umb-$Module-classes"

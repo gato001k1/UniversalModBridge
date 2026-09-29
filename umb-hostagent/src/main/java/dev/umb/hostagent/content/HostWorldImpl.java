@@ -420,9 +420,26 @@ final class HostWorldImpl implements HostWorld, HostLevel {
         }
     }
 
+
+    private static final java.util.concurrent.atomic.AtomicInteger REFUSED_WRITES = new java.util.concurrent.atomic.AtomicInteger();
+
+    /**
+     * Writes load the target chunk synchronously. Off this level's own server thread (a stale
+     * owning thread never services and the caller hangs forever; refuse and log instead.
+     */
+    private boolean writableHere(String op, int x, int y, int z) {
+        if (this.serverThread == null || Thread.currentThread() == this.serverThread) return true;
+        if (REFUSED_WRITES.getAndIncrement() < 20) {
+            AgentLog.line("HostWorldImpl." + op + " refused off the level's server thread ("
+                    + Thread.currentThread().getName() + ") at " + x + "," + y + "," + z);
+        }
+        return false;
+    }
+
     @Override
     public void setBlock(int x, int y, int z, String legacyId, int meta, int flags) {
         try {
+            if (!writableHere("setBlock", x, y, z)) return;
             BlockPos pos = new BlockPos(x, y, z);
             BlockEntity previousEntity = level.getBlockEntity(pos);
             Block b = resolveVariantOrBase(legacyId, meta);
@@ -487,6 +504,7 @@ final class HostWorldImpl implements HostWorld, HostLevel {
     @Override
     public void setMeta(int x, int y, int z, int meta, int flags) {
         try {
+            if (!writableHere("setMeta", x, y, z)) return;
             Block current = level.getBlockState(new BlockPos(x, y, z)).getBlock();
             if (current instanceof UmbLegacyBlock ulb && ulb.getLegacyId() != null) {
                 setBlock(x, y, z, ulb.getLegacyId(), meta, flags);
@@ -501,6 +519,7 @@ final class HostWorldImpl implements HostWorld, HostLevel {
     @Override
     public void removeBlock(int x, int y, int z) {
         try {
+            if (!writableHere("removeBlock", x, y, z)) return;
             BlockPos pos = new BlockPos(x, y, z);
             level.removeBlock(pos, false);
             UmbMetadataSavedData.get(level).clearMeta(x, y, z);

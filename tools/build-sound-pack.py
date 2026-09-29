@@ -37,11 +37,11 @@ JSON is written UTF-8 with NO BOM and CRLF line endings (the convention of the
 existing packs; a repo-wide audit requires BOM-free generated JSON).
 
 Usage:
-  python tools/build-sound-pack.py --namespace hbm \
+  python tools/windows/build-sound-pack.py --namespace hbm \
       --assets research/out/legacy/hbm-assets/assets/hbm \
       --pack research/out/legacy/packs/hbm-sounds \
       --expect-missing weapon/grenadebounce2
-  python tools/build-sound-pack.py --check --pack research/out/legacy/packs/hbm-sounds
+  python tools/windows/build-sound-pack.py --check --pack research/out/legacy/packs/hbm-sounds
 """
 
 import argparse

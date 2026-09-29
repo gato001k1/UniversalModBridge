@@ -2,17 +2,17 @@
 # GameData.getBlockRegistry() (vanilla + every staged mod) via BlockShapeProbe, writing
 # a caller-selected JSON path and printing the BLOCK-SHAPES summary line.
 #
-#   powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-legacy-block-shapes.ps1 [-Heap 1G] [-TimeoutSec 180] [-ModJar jar] [-Out json]
+#   powershell -NoProfile -ExecutionPolicy Bypass -File tools\windows\run-legacy-block-shapes.ps1 [-Heap 1G] [-TimeoutSec 180] [-ModJar jar] [-Out json]
 # The historical no-argument invocation remains HBM -> research/out/legacy/block-shapes.json.
 # Any non-HBM -ModJar invocation must provide -Out; this prevents foreign runs from rewriting
 # the canonical HBM corpus.
 #
-# Same JVM-flag discipline as tools\run-legacy-tick-coverage.ps1 / run-legacy-m1-probe.ps1 - a
+# Same JVM-flag discipline as tools\windows\run-legacy-tick-coverage.ps1 / run-legacy-m1-probe.ps1 - a
 # SEPARATE process/boot, never run in the same JVM as another run-legacy-*.ps1 invocation (FML's
 # Loader/GameData singletons are global and single-shot).
 $ErrorActionPreference = 'Stop'
 
-$repo   = Split-Path -Parent $PSScriptRoot
+$repo   = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $jdk25  = Join-Path $repo 'tools\jdk-25.0.4.1+1\bin\java.exe'
 $build  = Join-Path $repo 'build\legacy'
 $outDir = Join-Path $repo 'research\out\legacy\legacy-boot'
@@ -32,7 +32,7 @@ $log4jCore= (Get-ChildItem -Recurse -Filter 'log4j-core-*.jar' $libsDir | Select
 $log4jCfg = Join-Path $mod 'resources\log4j2-legacy.xml'
 
 foreach ($p in @($jdk25, $bootJar, $apiJar, $bridgeApiJar, $lsJar, $forgeSrg, $runtimeJar, $lwJar, $joptJar, $log4jApi, $log4jCore, $log4jCfg)) {
-  if (-not (Test-Path $p)) { Write-Error ("missing: " + $p + " - run tools\build-legacy.ps1 first"); exit 1 }
+  if (-not (Test-Path $p)) { Write-Error ("missing: " + $p + " - run tools\windows\build-legacy.ps1 first"); exit 1 }
 }
 
 $heap       = '1G'

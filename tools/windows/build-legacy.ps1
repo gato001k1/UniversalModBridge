@@ -1,7 +1,7 @@
 ﻿# Build umb-legacy: the "legacy universe" - real Forge 1.7.10 + SRG vanilla 1.7.10 running headless
 # inside an isolated child-first classloader on JDK 25.
 #
-#   powershell -NoProfile -ExecutionPolicy Bypass -File tools\build-legacy.ps1 [-SkipRemap] [-SkipTests]
+#   powershell -NoProfile -ExecutionPolicy Bypass -File tools\windows\build-legacy.ps1 [-SkipRemap] [-SkipTests]
 #
 # Three artifacts, three different compilation targets, for reasons that matter:
 #
@@ -22,7 +22,7 @@
 # stage 2 builds the rest against the freshly SRG-ified Forge jar.
 $ErrorActionPreference = 'Stop'
 
-$repo    = Split-Path -Parent $PSScriptRoot
+$repo    = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $jdk21   = Join-Path $repo 'tools\jdk-21.0.12.1+1\bin'
 $jdk25   = Join-Path $repo 'tools\jdk-25.0.4.1+1\bin'
 $javac21 = Join-Path $jdk21 'javac.exe'

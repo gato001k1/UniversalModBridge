@@ -6,13 +6,13 @@
 # (ProGuard-format client.txt) IS fetched to research\mappings\<Version>-client.txt -
 # same runtime-fetch-only rule as the jar, sha1-verified, never committed.
 #
-# Usage: .\tools\fetch-host.ps1 [-Version 26.2] [-Out research\jars]
+# Usage: .\tools\windows\fetch-host.ps1 [-Version 26.2] [-Out research\jars]
 param(
     [string]$Version = '26.2',
     [string]$Out = 'research\jars'
 )
 $ErrorActionPreference = 'Stop'
-Set-Location (Split-Path -Parent $PSScriptRoot)
+Set-Location (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
 
 $manifestUrl = 'https://piston-meta.mojang.com/mc/game/version_manifest_v2.json'
 

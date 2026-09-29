@@ -1,7 +1,7 @@
 #requires -Version 5.1
 <#
   Run dev.umb.guimap.GuiMap over a 1.7.10 Forge mod jar.
-    .\tools\run-guimap.ps1 [-Jar <path>] [-Out <path>]
+    .\tools\windows\run-guimap.ps1 [-Jar <path>] [-Out <path>]
 #>
 param(
   [string]$Jar,
@@ -9,7 +9,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 
-$root   = Split-Path -Parent $PSScriptRoot
+$root   = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $java   = Join-Path $root 'tools\jdk-21.0.12.1+1\bin\java.exe'
 $libDir = Join-Path $root 'tools\junit'
 $classes= Join-Path $root 'build\guimap\classes'
@@ -29,7 +29,7 @@ if (-not $Out) {
   }
 }
 
-if (-not (Test-Path $classes)) { throw "not built; run tools\build-guimap.ps1 first" }
+if (-not (Test-Path $classes)) { throw "not built; run tools\windows\build-guimap.ps1 first" }
 if (-not (Test-Path $Jar))     { throw "jar not found: $Jar" }
 
 $cp = @(

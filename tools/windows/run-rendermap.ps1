@@ -1,7 +1,7 @@
 #requires -Version 5.1
 <#
   Run dev.umb.rendermap.RenderMap over a mod jar + registry snapshot.
-    .\tools\run-rendermap.ps1 [-Jar <path>] [-Snapshot <path>] [-OutDir <path>] [-AlsoWrite <file>]
+    .\tools\windows\run-rendermap.ps1 [-Jar <path>] [-Snapshot <path>] [-OutDir <path>] [-AlsoWrite <file>]
   Defaults to the HBM jar + hbm-snapshot.json. -AlsoWrite drops a byte-identical compat
   copy of <namespace>-render-map.json under another file name (for callers still pointed
   at a legacy layout, e.g. a manifest referencing rendermap-mcheli/hbm-render-map.json).
@@ -14,7 +14,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 
-$root   = Split-Path -Parent $PSScriptRoot
+$root   = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $java   = Join-Path $root 'tools\jdk-21.0.12.1+1\bin\java.exe'
 $libDir = Join-Path $root 'tools\junit'
 $classes= Join-Path $root 'build\rendermap\classes'
@@ -23,7 +23,7 @@ if (-not $Jar)      { $Jar      = Join-Path $root 'research\mods-hbm\HBM-NTM-1.0
 if (-not $Snapshot) { $Snapshot = Join-Path $root 'research\out\legacy\hbm-snapshot.json' }
 if (-not $OutDir)   { $OutDir   = Join-Path $root 'research\out\legacy\rendermap' }
 
-if (-not (Test-Path $classes)) { throw "not built; run tools\build-rendermap.ps1 first" }
+if (-not (Test-Path $classes)) { throw "not built; run tools\windows\build-rendermap.ps1 first" }
 if (-not (Test-Path $Jar))      { throw "jar not found: $Jar" }
 if (-not (Test-Path $Snapshot)) { throw "snapshot not found: $Snapshot" }
 

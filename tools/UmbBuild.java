@@ -6,7 +6,6 @@
  *   java tools/UmbBuild.java test
  *   java tools/UmbBuild.java release
  *
- * The PowerShell files remain the lead's Windows wrappers.  This file is the
  * portable implementation and intentionally uses only java/javac/jar plus JDK
  * classes; no shell, Gradle, or OS-specific executable is required.
  */
@@ -14,6 +13,9 @@
 import java.util.regex.Pattern;
 import java.io.*;
 import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.nio.file.attribute.BasicFileAttributes;
@@ -63,7 +65,8 @@ class UmbBuild {
         Path root = Paths.get(opts.getOrDefault("root", here.toString()));
         Path inputs = Paths.get(opts.getOrDefault("inputs", root.toString()));
         UmbBuild b = new UmbBuild(root, inputs);
-        switch (positional.get(0)) {
+        try { switch (positional.get(0)) {
+            case "fetch" -> b.fetchInputs();
             case "build" -> b.buildAll();
             case "test" -> { b.buildAll(); b.runTests(); }
             case "release" -> { b.buildAll(); b.makeRelease(); }
@@ -78,11 +81,14 @@ class UmbBuild {
             case "rendermap" -> b.buildRenderMap();
             case "guimap" -> b.buildGuiMap();
             default -> usage();
+        }} catch (MissingInput e) {
+            System.err.println("UMB missing input: " + e.getMessage() + ". Fix: java tools/UmbBuild.java fetch");
+            System.exit(2);
         }
     }
 
     private static void usage() {
-        System.err.println("usage: java tools/UmbBuild.java <build|test|release|release-bundle|legacy|hostagent|objbridge|rendermap|guimap> [--root DIR] [--inputs DIR]");
+        System.err.println("usage: java tools/UmbBuild.java <fetch|build|test|release|release-bundle|legacy|hostagent|objbridge|rendermap|guimap> [--root DIR] [--inputs DIR]");
         System.exit(2);
     }
 
@@ -103,8 +109,10 @@ class UmbBuild {
     }
 
     private static void die(String message) { throw new IllegalStateException(message); }
+    private static final class MissingInput extends RuntimeException { MissingInput(String message) { super(message); } }
 
     private void buildAll() throws Exception {
+        ensureInputs();
         buildLegacy(false, true);
         buildHostAgent();
         buildObjBridge();
@@ -256,7 +264,111 @@ class UmbBuild {
         try (Stream<Path> s=Files.walk(dir)) { return s.filter(Files::isRegularFile).filter(p->p.getFileName().toString().matches(glob)).findFirst().orElse(null); }
     }
 
-    private Path existing(Path p, String label) { if (!Files.exists(p)) die("missing "+label+": "+p); return p; }
+    private Path existing(Path p, String label) { if (!Files.exists(p)) throw new MissingInput("missing "+label+": "+p); return p; }
+
+    private void ensureInputs() throws Exception {
+        if (!Files.isRegularFile(input("tools/junit/asm-9.9.jar"))
+                || !Files.isRegularFile(input("research/visual/mc1710-native/classpath.txt"))
+                || !Files.isRegularFile(input("research/jars/26.2/client.jar"))
+                || !Files.isRegularFile(input("research/jars/1.12.2/client.jar"))
+                || !Files.isRegularFile(input("research/jars/1.16.5/client.jar"))
+                || !Files.isRegularFile(input("research/mappings/joined-1.7.10.srg"))) fetchInputs();
+    }
+
+    /** Portable, checksum-verified equivalent of ci-fetch.ps1. */
+    private void fetchInputs() throws Exception {
+        Fetcher f = new Fetcher();
+        f.maven("https://repo1.maven.org/maven2", "org.ow2.asm", "asm", "9.9", "asm-9.9.jar", input("tools/junit/asm-9.9.jar"));
+        for (String a : List.of("asm-tree", "asm-commons", "asm-analysis", "asm-util")) f.maven("https://repo1.maven.org/maven2", "org.ow2.asm", a, "9.9", a+"-9.9.jar", input("tools/junit/"+a+"-9.9.jar"));
+        f.maven("https://repo1.maven.org/maven2", "com.google.code.gson", "gson", "2.14.0", "gson-2.14.0.jar", input("tools/junit/gson.jar"));
+        f.maven("https://repo1.maven.org/maven2", "org.junit.platform", "junit-platform-console-standalone", "1.12.2", "junit-platform-console-standalone-1.12.2.jar", input("tools/junit/junit-platform-console-standalone.jar"));
+        f.maven("https://repo1.maven.org/maven2", "org.apache.commons", "commons-compress", "1.21", "commons-compress-1.21.jar", input("tools/junit/commons-compress-1.21.jar"));
+        Path v17=input("research/visual/mc1710-native"); f.mojang("1.7.10",v17,input("research/visual/mc1710-native/classpath.generated.txt"));
+        Path client17=v17.resolve("client.jar"); Path v17ver=v17.resolve("versions/1.7.10-Forge10.13.4.1614-1.7.10/1.7.10-Forge10.13.4.1614-1.7.10.jar"); copyFile(client17,v17ver);
+        Path forge17=v17.resolve("libraries/net/minecraftforge/forge/1.7.10-10.13.4.1614-1.7.10/forge-1.7.10-10.13.4.1614-1.7.10-universal.jar"); f.maven("https://maven.minecraftforge.net","net.minecraftforge","forge","1.7.10-10.13.4.1614-1.7.10",forge17.getFileName().toString(),forge17);
+        Path lw=v17.resolve("libraries/net/minecraft/launchwrapper/1.12/launchwrapper-1.12.jar"); f.verified("https://libraries.minecraft.net/net/minecraft/launchwrapper/1.12/launchwrapper-1.12.jar",lw);
+        writeForgeClasspath(v17,forge17,v17ver,input("research/visual/mc1710-native/classpath.txt"));
+        Path v26=input("research/visual/mc262-vanilla"); f.mojang("26.2",input("research/jars/26.2"),v26.resolve("classpath.generated.txt")); copyTree(input("research/jars/26.2/libraries"),v26.resolve("libraries")); copyFile(v26.resolve("classpath.generated.txt"),v26.resolve("classpath.txt"));
+        for (String ver : List.of("1.12.2","1.16.5")) { Path d=input("research/jars/"+ver); f.mojang(ver,d,d.resolve("classpath.txt")); String fv=ver.equals("1.12.2")?"14.23.5.2860":"36.2.39"; f.maven("https://maven.minecraftforge.net","net.minecraftforge","forge",ver+"-"+fv,"forge-"+ver+"-"+fv+"-universal.jar",d.resolve("forge-"+ver+"-"+fv+"-universal.jar")); }
+        copyFile(lw,input("research/out/legacy-1122/libs/launchwrapper-1.12.jar"));
+        f.maven("https://repo1.maven.org/maven2","org.ow2.asm","asm-debug-all","5.2","asm-debug-all-5.2.jar",input("research/out/legacy-1122/libs/asm-debug-all-5.2.jar"));
+        Path mcp=input("research/mappings/ci-mcp-1.7.10-srg.zip"); f.verified("https://mcp.zeith.org/mcp/1.7.10/mcp-1.7.10-srg.zip",mcp); extractMapping(mcp,input("research/mappings/joined-1.7.10.srg"));
+        // This is the former cache-only DEBUG_SAVE artifact. ClientSrgifier is the
+        // deterministic source-of-truth and consumes only the fetched inputs above.
+        generateRuntime(client17,forge17,input("research/visual/mc1710-native/classpath.txt"),input("research/mappings/joined-1.7.10.srg"));
+        System.out.println("UMB-FETCH-OK");
+    }
+
+    private void generateRuntime(Path client, Path forge, Path cpFile, Path mapping) throws Exception {
+        Path boot=root.resolve("build/legacy/umb-legacy-boot.jar");
+        if (!Files.isRegularFile(boot)) { buildLegacy(true,false); boot=root.resolve("build/legacy/umb-legacy-boot.jar"); }
+        Path raw=input("research/out/legacy/1.7.10-forge-srg-runtime.jar");
+        if (Files.isRegularFile(raw)) return;
+        Path work=input("research/out/legacy/client-patch"); Files.createDirectories(work);
+        List<Path> cp=classpathFile(cpFile); cp.add(0,client); cp.add(1,forge); cp.add(2,boot); cp.add(3,toolsJunit.resolve("asm-9.9.jar")); cp.add(4,toolsJunit.resolve("asm-tree-9.9.jar")); cp.add(5,toolsJunit.resolve("asm-commons-9.9.jar")); cp.add(6,toolsJunit.resolve("commons-compress-1.21.jar"));
+        Path packSource=root.resolve("tools/pack200/java"), pack200=root.resolve("build/pack200-runtime-classes");
+        deleteTree(pack200); Files.createDirectories(pack200);
+        run(cmd(javac,List.of("--patch-module","java.base="+packSource,"-d",pack200.toString(),"@"+argFile("runtime-pack200",sources(packSource)))),root);
+        List<String> runtimeArgs=new ArrayList<>(List.of("--patch-module","java.base="+pack200,"--add-opens","java.base/java.io=ALL-UNNAMED","-Dumb.repo="+root,"-Dumb.legacy.classpathFile="+cpFile,"-cp",cp(cp),"dev.umb.legacy.boot.ClientSrgifier",mapping.toString(),client.toString(),raw.toString(),forge.toString(),cpFile.toString(),work.toString()));
+        run(cmd(java,runtimeArgs),root);
+        if (!Files.isRegularFile(raw)) throw new IllegalStateException("runtime generation produced no output: "+raw);
+    }
+
+    private void extractMapping(Path zip, Path destination) throws IOException {
+        if (Files.isRegularFile(destination)) return; Files.createDirectories(destination.getParent());
+        try (java.util.zip.ZipFile z=new java.util.zip.ZipFile(zip.toFile())) { java.util.zip.ZipEntry e=z.stream().filter(x->x.getName().matches("(?i)(^|.*/)joined\\.srg")).findFirst().orElseThrow(()->new IOException("MCP archive has no joined.srg")); try(InputStream in=z.getInputStream(e)){Files.copy(in,destination);}}
+    }
+
+    private void copyFile(Path from, Path to) throws IOException { Files.createDirectories(to.toAbsolutePath().getParent()); if (Files.isRegularFile(from)) { if (Files.isRegularFile(to) && Files.mismatch(from,to)<0) return; Files.copy(from,to,StandardCopyOption.REPLACE_EXISTING); } }
+
+    private void writeForgeClasspath(Path root17, Path forge, Path versionJar, Path destination) throws Exception {
+        Path template=root17.resolve("launch-cmd.txt"); if(!Files.isRegularFile(template)) template=root.resolve("tools/forge-1710-launch-classpath.txt");
+        String command=Files.readString(template,StandardCharsets.UTF_8);
+        int q=command.indexOf('"'), end=command.indexOf('"',q+1);
+        if(q<0||end<0) throw new IOException("Forge launcher metadata has no quoted classpath: "+template);
+        List<String> relative=dropOlderLibraries(Arrays.asList(command.substring(q+1,end).split("[;]")));
+        List<String> paths=new ArrayList<>();
+        Fetcher fetcher=new Fetcher();
+        for(String r:relative){ Path p=root17.resolve(r.replace('/',File.separatorChar)).normalize(); if(!Files.isRegularFile(p) && r.startsWith("libraries/")) fetcher.library(r.substring("libraries/".length()),p); if(!Files.isRegularFile(p)) throw new IOException("Forge classpath entry is missing: "+r); paths.add(p.toAbsolutePath().toString()); }
+        String forgePath=forge.toAbsolutePath().toString(); paths.removeIf(p->p.equals(forgePath)); paths.add(0,forgePath);
+        String lw=root17.resolve("libraries/net/minecraft/launchwrapper/1.12/launchwrapper-1.12.jar").toAbsolutePath().toString();
+        if(!paths.contains(lw)) paths.add(1,lw);
+        String version=versionJar.toAbsolutePath().toString(); if(!paths.contains(version)) paths.add(version);
+        Files.createDirectories(destination.getParent()); Files.writeString(destination,String.join(File.pathSeparator,paths)+System.lineSeparator(),StandardCharsets.UTF_8);
+    }
+
+    /** Removes an older copy of the same Maven group/artifact while preserving exact duplicates. */
+    static List<String> dropOlderLibraries(List<String> entries) {
+        Map<String,String> versions=new HashMap<>(); Map<String,Integer> positions=new HashMap<>(); List<String> out=new ArrayList<>();
+        for(String entry:entries){String e=entry.trim(); if(e.isEmpty())continue; String normalized=e.replace('\\','/'); int lib=normalized.toLowerCase(Locale.ROOT).indexOf("/libraries/"); if(lib>=0) normalized=normalized.substring(lib+1); String[] p=normalized.split("/");
+            if(p.length>=5 && "libraries".equalsIgnoreCase(p[0])) { String key=String.join("/",Arrays.copyOfRange(p,1,p.length-2)); String version=p[p.length-2]; String marker=key+"@"; boolean older=false;
+                String prior=versions.get(key); if(prior!=null && !prior.equals(version)){ int cmp=compareVersions(version,prior); if(cmp<=0) older=true; else { int old=positions.get(key); out.set(old,null); versions.put(key,version); positions.put(key,out.size()); } }
+                if(older)continue; versions.putIfAbsent(key,version); positions.putIfAbsent(key,out.size());
+            } out.add(e);
+        } return out.stream().filter(Objects::nonNull).toList();
+    }
+    private static int compareVersions(String a,String b){String[] x=a.split("[^0-9]+"),y=b.split("[^0-9]+");int n=Math.max(x.length,y.length);for(int i=0;i<n;i++){int u=i<x.length&&!x[i].isEmpty()?Integer.parseInt(x[i]):0,v=i<y.length&&!y[i].isEmpty()?Integer.parseInt(y[i]):0;if(u!=v)return Integer.compare(u,v);}return a.compareTo(b);}
+
+    private final class Fetcher {
+        private final HttpClient http=HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NORMAL).build();
+        private final Path cache=input(".ci-cache/downloads");
+        private String text(String url) throws Exception { return new String(http.send(HttpRequest.newBuilder(URI.create(url)).build(),HttpResponse.BodyHandlers.ofByteArray()).body(),StandardCharsets.UTF_8).trim(); }
+        private byte[] bytes(String url) throws Exception { return http.send(HttpRequest.newBuilder(URI.create(url)).build(),HttpResponse.BodyHandlers.ofByteArray()).body(); }
+        private void verified(String url,Path dest) throws Exception { String sha=text(url+".sha1").split("\\s+")[0]; Files.createDirectories(dest.getParent()); if(Files.isRegularFile(dest)&&sha.equalsIgnoreCase(hash(dest,"SHA-1")))return; Path tmp=cache.resolve(Integer.toHexString(url.hashCode())+".download"); Files.createDirectories(cache); Files.write(tmp,bytes(url)); if(!sha.equalsIgnoreCase(hash(tmp,"SHA-1")))throw new IOException("SHA-1 mismatch: "+url); Files.move(tmp,dest,StandardCopyOption.REPLACE_EXISTING); }
+        private void verified(String url,String sha,Path dest) throws Exception { Files.createDirectories(dest.getParent()); if(Files.isRegularFile(dest)&&sha.equalsIgnoreCase(hash(dest,"SHA-1")))return; Path tmp=cache.resolve(Integer.toHexString(url.hashCode())+".download"); Files.createDirectories(cache); Files.write(tmp,bytes(url)); if(!sha.equalsIgnoreCase(hash(tmp,"SHA-1")))throw new IOException("SHA-1 mismatch: "+url); Files.move(tmp,dest,StandardCopyOption.REPLACE_EXISTING); }
+        private void maven(String base,String group,String artifact,String version,String file,Path dest)throws Exception{String u=base+"/"+group.replace('.','/')+"/"+artifact+"/"+version+"/"+file;verified(u,dest);}
+        private void library(String relative,Path dest)throws Exception{String pin=null;Path pins=root.resolve("tools/forge-1710-library-sha1.txt");if(Files.isRegularFile(pins))for(String line:Files.readAllLines(pins)){String[] p=line.trim().split("\\s+");if(p.length==2&&p[1].equals(relative)){pin=p[0];break;}}Exception last=null;for(String base:List.of("https://maven.minecraftforge.net","https://repo1.maven.org/maven2","https://libraries.minecraft.net")){String u=base+"/"+relative;try{String sha=pin!=null?pin:text(u+".sha1").split("\\s+")[0];verified(u,sha,dest);return;}catch(Exception e){last=e;}}throw new IOException("unable to fetch Forge launcher library "+relative,last);}
+        private void mojang(String version,Path target,Path cpFile)throws Exception{Map<?,?> manifest=(Map<?,?>)Json.parse(text("https://piston-meta.mojang.com/mc/game/version_manifest_v2.json")); Map<?,?> found=null; for(Object o:(List<?>)manifest.get("versions")){Map<?,?> e=(Map<?,?>)o;if(version.equals(e.get("id"))){found=e;break;}} if(found==null)throw new IOException("Mojang version not found: "+version); Map<?,?> j=(Map<?,?>)Json.parse(text((String)found.get("url"))); Files.createDirectories(target); Map<?,?> dl=(Map<?,?>)j.get("downloads"); Map<?,?> c=(Map<?,?>)dl.get("client"); Path client=target.resolve("client.jar"); download((String)c.get("url"),(String)c.get("sha1"),client); List<Path> entries=new ArrayList<>(); Object lo=j.get("libraries"); if(lo instanceof List<?> list) for(Object x:list){Map<?,?> lib=(Map<?,?>)x; if(!allowed(lib.get("rules")))continue; Map<?,?> d=(Map<?,?>)lib.get("downloads"); if(d==null)continue; Object ao=d.get("artifact"); if(ao instanceof Map<?,?> a){Path out=target.resolve("libraries").resolve(((String)a.get("path")).replace('/',File.separatorChar));download((String)a.get("url"),(String)a.get("sha1"),out);entries.add(out);} } entries.add(client); Files.createDirectories(cpFile.getParent()); Files.writeString(cpFile,entries.stream().map(p->p.toAbsolutePath().toString()).distinct().collect(Collectors.joining(File.pathSeparator))+System.lineSeparator(),StandardCharsets.UTF_8); }
+        private boolean allowed(Object rules){if(!(rules instanceof List<?> list))return true; boolean ok=false;for(Object x:list){if(!(x instanceof Map<?,?> r))continue;Object os=r.get("os");boolean match=true;if(os instanceof Map<?,?> m && m.get("name") instanceof String n){String want=System.getProperty("os.name").toLowerCase(Locale.ROOT).contains("win")?"windows":System.getProperty("os.name").toLowerCase(Locale.ROOT).contains("mac")?"osx":"linux";match=want.equals(n);}if(match)ok="allow".equals(r.get("action"));}return ok;}
+        private void download(String u,String sha,Path d)throws Exception{Files.createDirectories(d.getParent());if(Files.isRegularFile(d)&&sha.equalsIgnoreCase(hash(d,"SHA-1")))return;Path t=cache.resolve(Integer.toHexString(u.hashCode())+".download");Files.write(t,bytes(u));if(!sha.equalsIgnoreCase(hash(t,"SHA-1")))throw new IOException("SHA-1 mismatch: "+u);Files.move(t,d,StandardCopyOption.REPLACE_EXISTING);}
+    }
+
+    private static String hash(Path p,String algorithm) throws Exception { MessageDigest d=MessageDigest.getInstance(algorithm); try(InputStream in=Files.newInputStream(p)){in.transferTo(new OutputStream(){public void write(int b){d.update((byte)b);}public void write(byte[] b,int o,int l){d.update(b,o,l);}});} StringBuilder s=new StringBuilder();for(byte b:d.digest())s.append(String.format("%02x",b));return s.toString(); }
+
+    private static final class Json {
+        static Object parse(String s){return new Parser(s).value();}
+        private static final class Parser { final String s; int p; Parser(String s){this.s=s;} void ws(){while(p<s.length()&&s.charAt(p)<=32)p++;} Object value(){ws();char c=s.charAt(p);if(c=='{')return object();if(c=='[')return array();if(c=='"')return string();if(s.startsWith("true",p)){p+=4;return Boolean.TRUE;}if(s.startsWith("false",p)){p+=5;return Boolean.FALSE;}if(s.startsWith("null",p)){p+=4;return null;}int q=p;while(p<s.length()&&"-+.0123456789eE".indexOf(s.charAt(p))>=0)p++;return Double.valueOf(s.substring(q,p));} Map<String,Object> object(){Map<String,Object> m=new LinkedHashMap<>();p++;ws();while(s.charAt(p)!='}'){String k=string();ws();p++;m.put(k,value());ws();if(s.charAt(p)==','){p++;ws();}}p++;return m;} List<Object> array(){List<Object> a=new ArrayList<>();p++;ws();while(s.charAt(p)!=']'){a.add(value());ws();if(s.charAt(p)==','){p++;ws();}}p++;return a;} String string(){p++;StringBuilder b=new StringBuilder();while(s.charAt(p)!='"'){char c=s.charAt(p++);if(c=='\\'){char n=s.charAt(p++);b.append(n=='n'?'\n':n=='r'?'\r':n=='t'?'\t':n);}else b.append(c);}p++;return b.toString();} }
+    }
 
     private void buildLegacy(boolean skipRemap, boolean tests) throws Exception {
         Path build=root.resolve("build/legacy"); Files.createDirectories(build);
@@ -304,10 +416,16 @@ class UmbBuild {
             existing(srgForge,"SRG Forge output");
             Path lsClasses=build.resolve("classes-legacyside"), ls=build.resolve("umb-legacy-legacyside.jar");
             compile("legacy-legacyside",root.resolve("umb-legacy/src/legacyside/java"),cp(join(List.of(api,canonicalApi,lw,fields,srgForge,asm,toolsJunit.resolve("asm-tree-9.9.jar"),toolsJunit.resolve("asm-commons-9.9.jar")),libs)),"8",lsClasses); if(Files.isDirectory(root.resolve("umb-legacy/src/legacyside/resources"))) copyTree(root.resolve("umb-legacy/src/legacyside/resources"),lsClasses); jar(lsClasses,ls,null);
-            if (tests) {
+            // The source distribution does not contain player-owned legacy mod jars or
+            // their generated test fixtures. Keep a clean checkout buildable; the full
+            // legacy test suite still runs when the local corpus is present.
+            boolean haveLegacyTestCorpus = Files.isRegularFile(input("research/mods-hbm/HBM-NTM-1.0.27_X5771.jar"));
+            if (tests && haveLegacyTestCorpus) {
                 Path tc=build.resolve("classes-test");
                 compile("legacy-tests",root.resolve("umb-legacy/src/test/java"),cp(join(List.of(api,canonicalApi,boot,lw,fields,srgForge,ls,junit,asm),libs)),"21",tc);
                 run(cmd(java,List.of("-Djava.awt.headless=true","-Dumb.repo="+root,"-Dumb.legacy.classpathFile="+nativeClasspath,"--sun-misc-unsafe-memory-access=allow","--add-opens","java.base/java.lang=ALL-UNNAMED","--add-opens","java.base/java.lang.reflect=ALL-UNNAMED","-jar",junit.toString(),"execute","--class-path",cp(join(List.of(tc,api,canonicalApi,boot,lw,fields,srgForge,ls,jopt,log4jApi,log4jCore,asm),libs)),"--select-package","dev.umb.legacy.test","--details=summary","--disable-banner")),root);
+            } else if (tests) {
+                System.out.println("LEGACY-1710-TEST-SKIP: missing local legacy mod corpus; source build remains available, run tests with research/mods-hbm/HBM-NTM-1.0.27_X5771.jar");
             }
         }
         System.out.println("LEGACY-BUILD-OK");

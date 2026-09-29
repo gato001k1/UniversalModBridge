@@ -23,7 +23,7 @@ import java.util.List;
 /**
  * Headless proof that the agent's item-model registration really happens on the real client jar.
  *
- * <p>Run it with BOTH agents attached (see {@code tools/probe-objbridge.ps1}); it then
+ * <p>Run it with BOTH agents attached (see {@code tools/windows/probe-objbridge.ps1}); it then
  * <ol>
  *   <li>runs {@code net.minecraft.server.Bootstrap.bootStrap()} so the registries and DFU codecs
  *       exist,</li>

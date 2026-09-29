@@ -1,11 +1,11 @@
 # JUnit gate for umb-console (portable JDK 21, JUnit console standalone).
 #
-#   powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-console-tests.ps1
+#   powershell -NoProfile -ExecutionPolicy Bypass -File tools\windows\run-console-tests.ps1
 #
 # Never uses the system JAVA_HOME. Builds the main classes first if they are missing.
 $ErrorActionPreference = 'Stop'
 
-$repo = Split-Path -Parent $PSScriptRoot
+$repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $jdk = Join-Path $repo 'tools\jdk-21.0.12.1+1\bin'
 $javac = Join-Path $jdk 'javac.exe'
 $java = Join-Path $jdk 'java.exe'

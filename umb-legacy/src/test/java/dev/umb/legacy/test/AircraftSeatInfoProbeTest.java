@@ -82,7 +82,7 @@ class AircraftSeatInfoProbeTest {
 
         for (String p : new String[] {java25, bootJar, apiJar, bridgeApiJar, lsJar, forgeSrg, runtimeJar,
                 lwJar, joptJar, log4jApi, log4jCore, log4jCfg}) {
-            assertTrue(new File(p).exists(), "missing: " + p + " - run tools/build-legacy.ps1 first");
+            assertTrue(new File(p).exists(), "missing: " + p + " - run tools/windows/build-legacy.ps1 first");
         }
 
         String hostCp = String.join(File.pathSeparator, bootJar, apiJar, bridgeApiJar, lwJar, joptJar,

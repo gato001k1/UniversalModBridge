@@ -101,6 +101,6 @@ public interface HostPlayer {
 }
 
 // MIRROR of the canonical umb-bridge-api owned by Lane A (umb-legacy) -- do not hand-edit.
-// Synced verbatim by tools/build-hostagent.ps1 from
+// Synced verbatim by tools/windows/build-hostagent.ps1 from
 // umb-legacy/src/bridge-api/java/dev/umb/bridge/api/ on every build. If you need to change the
 // boundary contract, change it there (and change BOTH sides together per DESIGN.md).

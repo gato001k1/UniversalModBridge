@@ -1,7 +1,7 @@
 # JUnit gate for umb-objbridge. JDK 25 only (client.jar is classfile major 69).
-#   powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-objbridge-tests.ps1
+#   powershell -NoProfile -ExecutionPolicy Bypass -File tools\windows\run-objbridge-tests.ps1
 #
-# Run tools\build-objbridge.ps1 first. Tests run with the repo root as cwd because several of them
+# Run tools\windows\build-objbridge.ps1 first. Tests run with the repo root as cwd because several of them
 # assert against the real asset tree (research\out\legacy\hbm-assets), the real client jar
 # (research\jars\26.2\client.jar) and the generated overlay pack.
 #
@@ -10,7 +10,7 @@
 # and never written; if it is absent that single test self-skips.
 $ErrorActionPreference = 'Stop'
 
-$repo = Split-Path -Parent $PSScriptRoot
+$repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $jdk25 = Join-Path $repo 'tools\jdk-25.0.4.1+1\bin'
 $javac = Join-Path $jdk25 'javac.exe'
 $java = Join-Path $jdk25 'java.exe'
@@ -21,7 +21,7 @@ $testSrc = Join-Path $repo 'umb-objbridge\src\test\java'
 $testClasses = Join-Path $repo 'build\objbridge\test-classes'
 
 foreach ($p in @($javac, $java, $junit, $cpFile, $mainClasses)) {
-  if (-not (Test-Path $p)) { Write-Error ("missing: " + $p + " (run tools\build-objbridge.ps1 first)"); exit 1 }
+  if (-not (Test-Path $p)) { Write-Error ("missing: " + $p + " (run tools\windows\build-objbridge.ps1 first)"); exit 1 }
 }
 
 $rawGameCp = (Get-Content $cpFile -Raw).Trim()

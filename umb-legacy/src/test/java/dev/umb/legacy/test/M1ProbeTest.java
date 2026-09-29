@@ -15,7 +15,16 @@ import java.util.stream.Stream;
 
 import org.junit.jupiter.api.Test;
 
-/** Legacy compatibility behavior. */
+/**
+ * DESIGN.md LANE A step 6 gate. Runs {@code dev.umb.legacy.boot.M1ProbeMain} - the SAME real FML
+ * boot + {@code LegacyBridgeImpl} scenario {@code tools/windows/run-legacy-m1-probe.ps1} drives - as a
+ * SEPARATE JVM subprocess (not in-process): FML's {@code Loader}/{@code GameData} singletons are
+ * global and single-shot, so this must never share a JVM with any other boot in this test run.
+ *
+ * <p>Deliberately does NOT replicate {@code run-legacy-m1-probe.ps1}'s RAM guard (it busy-waits for
+ * 1.2 GB free before starting a 1G-heap JVM) - flagged as a known gap for whoever next runs the full
+ * interactive use.</p>
+ */
 class M1ProbeTest {
 
     @Test
@@ -49,7 +58,7 @@ class M1ProbeTest {
 
         for (String p : new String[] {java25, bootJar, apiJar, bridgeApiJar, lsJar, forgeSrg, runtimeJar,
                 lwJar, joptJar, log4jApi, log4jCore, log4jCfg}) {
-            assertTrue(new File(p).exists(), "missing: " + p + " - run tools/build-legacy.ps1 first");
+            assertTrue(new File(p).exists(), "missing: " + p + " - run tools/windows/build-legacy.ps1 first");
         }
 
         String hostCp = String.join(File.pathSeparator, bootJar, apiJar, bridgeApiJar, lwJar, joptJar,

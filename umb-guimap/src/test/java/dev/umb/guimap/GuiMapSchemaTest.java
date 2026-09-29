@@ -15,7 +15,7 @@ import static org.junit.jupiter.api.Assertions.*;
  * umb-rendermap's {@code RenderMapSchemaTest} / umb-objbridge's {@code TexturePickTest}): every
  * GUI row must carry the fields the schema promises, every resolved background texture that
  * claims to exist in the jar must be reachable at its assetPath, and every drawTexturedModalRect
- * row must be classified either static or dynamic. Self-skips if {@code tools/run-guimap.ps1}
+ * row must be classified either static or dynamic. Self-skips if {@code tools/windows/run-guimap.ps1}
  * has not been run in this checkout.
  */
 class GuiMapSchemaTest {

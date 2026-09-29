@@ -23,7 +23,7 @@ import static org.junit.jupiter.api.Assertions.*;
  * M12 universal host (Decision C): one 26.2 image, per-mod ModLoader children,
  * isolation holds, Vec3i(100,200,-3) materialized proxy + publish/consume interop
  * (sequential gate A + concurrent stretch B with shared InteropRegistry).
- * CC0 fixtures, ASM 9.9, D4, §24, portable toolchain via tools/umb-env.ps1.
+ * CC0 fixtures, ASM 9.9, D4, §24, portable toolchain via tools/windows/umb-env.ps1.
  */
 class UniversalHostTest {
 

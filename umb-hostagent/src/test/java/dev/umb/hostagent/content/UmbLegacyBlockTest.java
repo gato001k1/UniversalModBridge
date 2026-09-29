@@ -63,7 +63,7 @@ class UmbLegacyBlockTest {
         // This class constructs FRESH UmbLegacyBlock/BlockEntityType instances repeatedly, which
         // needs the registries to stay unfrozen (see TestSupport.ensureBootstrappedWithoutFreezing
         // javadoc) -- it therefore runs in its own separate java invocation from the rest of the
-        // suite (tools/run-hostagent-tests.ps1), since that mode is incompatible with new
+        // suite (tools/windows/run-hostagent-tests.ps1), since that mode is incompatible with new
         // ItemStack(...) elsewhere in the process.
         TestSupport.ensureBootstrappedWithoutFreezing();
     }

@@ -16,19 +16,20 @@ import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 
 /**
- * Runs {@code dev.umb.legacy.legacyside.RenderTickHudCaptureProbe} through the SAME
+ * {@code dev.umb.legacy.legacyside.RenderTickHudCaptureProbe} through the SAME
  * {@code dev.umb.legacy.boot.M1ProbeMain} subprocess harness {@link M1ProbeTest} uses (see that
  * class's javadoc for why this must be a separate JVM: FML's {@code Loader}/{@code GameData}
  * singletons are global and single-shot). No third-party mod jar is staged - the probe proves a
- * generic Forge event-bus mechanism, not anything mod-specific.
+ * generic Forge event-bus mechanism, not anything MCHeli-specific.
  */
 class RenderTickHudCaptureProbeTest {
 
     @Test
     void renderOverlayCapturesGeometryDrawnFromRenderTickEventEnd() throws Exception {
-        // Test-only override: lets a build point this ONE test at freshly rebuilt jars
-        // without touching the shared -Dumb.repo that M1ProbeTest - sharing this JVM
-        // in a full package run - resolves its own, unrelated jar/mod paths from.
+        // Test-only override (same pattern as LegacyEventNoArgCtorTest's
+        // rebuilt jars (this session added RenderTickHudCaptureProbe.java and edited
+        // M1ProbeMain.java) without touching the shared -Dumb.repo that M1ProbeTest - sharing
+        // this JVM in a full package run - resolves its own, unrelated jar/mod paths from.
         String repoOverride = System.getProperty("umb.legacy.testProbeRepo");
         Path repo = repoOverride != null ? Path.of(repoOverride) : repoRoot();
         Path build = repo.resolve("build/legacy");
@@ -53,7 +54,7 @@ class RenderTickHudCaptureProbeTest {
 
         for (String p : new String[] {java25, bootJar, apiJar, bridgeApiJar, lsJar, forgeSrg, runtimeJar,
                 lwJar, joptJar, log4jApi, log4jCore, log4jCfg}) {
-            assertTrue(new File(p).exists(), "missing: " + p + " - run tools/build-legacy.ps1 first");
+            assertTrue(new File(p).exists(), "missing: " + p + " - run tools/windows/build-legacy.ps1 first");
         }
 
         String hostCp = String.join(File.pathSeparator, bootJar, apiJar, bridgeApiJar, lwJar, joptJar,

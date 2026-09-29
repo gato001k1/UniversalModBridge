@@ -2,8 +2,8 @@
 # Minecraft 26.2 client jar, with BOTH agents attached (umb-hostagent first, umb-objbridge second -
 # the same order the windowed launcher uses).
 #
-#   powershell -NoProfile -ExecutionPolicy Bypass -File tools\probe-objbridge.ps1
-#   powershell -NoProfile -ExecutionPolicy Bypass -File tools\probe-objbridge.ps1 -Namespace ironchest
+#   powershell -NoProfile -ExecutionPolicy Bypass -File tools\windows\probe-objbridge.ps1
+#   powershell -NoProfile -ExecutionPolicy Bypass -File tools\windows\probe-objbridge.ps1 -Namespace ironchest
 #
 # Prints PROBE-OK / PROBE-FAIL and exits 0 / 1. No window, no GL.
 #
@@ -21,7 +21,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 
-$repo = Split-Path -Parent $PSScriptRoot
+$repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $java = Join-Path $repo 'tools\jdk-25.0.4.1+1\bin\java.exe'
 $cpFile = Join-Path $repo 'research\visual\mc262-vanilla\classpath.txt'
 $objAgent = Join-Path $repo 'build\objbridge\umb-objbridge.jar'

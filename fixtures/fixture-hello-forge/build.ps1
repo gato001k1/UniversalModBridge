@@ -6,14 +6,14 @@
 # shadow real loader interfaces at runtime).
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
-. ..\..\tools\umb-env.ps1
+. ..\..\tools\windows\umb-env.ps1
 
 $javac = Join-Path $env:JAVA_HOME 'bin\javac.exe'
 $jar = Join-Path $env:JAVA_HOME 'bin\jar.exe'
 
 $slf4j = Get-ChildItem '..\..\research\jars\26.2\libraries' -Recurse -Filter 'slf4j-api-*.jar' |
     Select-Object -First 1 -ExpandProperty FullName
-if (-not $slf4j) { Write-Error 'slf4j-api jar not found under research/jars/26.2/libraries (run tools/fetch-host.ps1 first)'; exit 1 }
+if (-not $slf4j) { Write-Error 'slf4j-api jar not found under research/jars/26.2/libraries (run tools/windows/fetch-host.ps1 first)'; exit 1 }
 
 New-Item -ItemType Directory -Force -Path build\classes, build\pkg | Out-Null
 

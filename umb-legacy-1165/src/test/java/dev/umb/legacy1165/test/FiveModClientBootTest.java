@@ -52,7 +52,8 @@ class FiveModClientBootTest {
         assumeTrue(manifest.isFile(), "classpath-1165.txt not present - skipping");
         List<File> files;
         try {
-            files = Legacy1165Classpath.readManifest(repo, manifest);
+            files = Legacy1165Classpath.forDist(
+                    Legacy1165Classpath.readManifest(repo, manifest), "CLIENT");
         } catch (Exception e) {
             assumeTrue(false, "a jar listed in classpath-1165.txt is missing - skipping: "
                     + e.getMessage());

@@ -38,7 +38,7 @@ public final class BootstrapProbe {
     private static final double THRESHOLD = 0.95;
 
     public static void main(String[] args) {
-        // Snapshot path comes from the caller (tools/probe-hostagent.ps1 passes it explicitly);
+        // Snapshot path comes from the caller (tools/windows/probe-hostagent.ps1 passes it explicitly);
         // no mod-specific default lives here. The -Dumb.snapshot system property (highest
         // precedence) exists for one-off manual runs.
         String cliSnap = args.length > 0 ? args[0] : null;

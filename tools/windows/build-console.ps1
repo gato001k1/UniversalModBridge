@@ -1,6 +1,6 @@
 # Build umb-console: the local web UI over harness\legacy.ps1.
 #
-#   powershell -NoProfile -ExecutionPolicy Bypass -File tools\build-console.ps1
+#   powershell -NoProfile -ExecutionPolicy Bypass -File tools\windows\build-console.ps1
 #
 # Portable JDK 21 (tools\jdk-21.0.12.1+1) - NEVER the system JAVA_HOME, which on this box is a
 # broken JRE 8 path with a stray LRM in it. Plain javac + jar; no gradle, no framework.
@@ -9,7 +9,7 @@
 # falls back to reading it out of the source tree so the page can be edited without a rebuild.
 $ErrorActionPreference = 'Stop'
 
-$repo = Split-Path -Parent $PSScriptRoot
+$repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $jdk = Join-Path $repo 'tools\jdk-21.0.12.1+1\bin'
 $javac = Join-Path $jdk 'javac.exe'
 $jar = Join-Path $jdk 'jar.exe'

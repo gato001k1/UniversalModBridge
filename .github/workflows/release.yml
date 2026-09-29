@@ -1,9 +1,9 @@
-name: UMB alpha release
+name: UMB release
 
 on:
   push:
     tags:
-      - 'v*.*.*-alpha.*'
+      - 'v*'
   workflow_dispatch:
 
 permissions:
@@ -37,20 +37,11 @@ jobs:
           key: umb-inputs-${{ runner.os }}-${{ hashFiles('tools/ci-fetch.ps1', 'research/jars/*.json', 'umb-legacy-1165/resources/classpath-1165.txt') }}
 
       - name: Download and verify official build inputs
-        shell: pwsh
-        run: pwsh -NoProfile -File tools/ci-fetch.ps1
-
-      - name: Fail when the legacy runtime is missing (release never skips legacy targets)
-        shell: pwsh
-        run: |
-          $jar = 'research/out/legacy/1.7.10-forge-srg-runtime.jar'
-          if (-not (Test-Path -LiteralPath $jar)) {
-            throw "Release builds require the legacy 1.7.10 Forge SRG runtime jar at $jar, but ci-fetch did not provide it. It cannot be regenerated from Mojang/Forge inputs and is only restored from the CI cache. Aborting: the legacy 1.7.10 targets are mandatory for a release."
-          }
-          Write-Host "Legacy runtime present: $jar"
+        shell: bash
+        run: java tools/UmbBuild.java fetch
 
       - name: Build, test and create the release bundle
-        shell: pwsh
+        shell: bash
         run: |
           java tools/UmbBuild.java test
           java tools/UmbBuild.java release-bundle

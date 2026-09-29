@@ -18,7 +18,7 @@ for %%J in (gson.jar asm-9.9.jar asm-tree-9.9.jar asm-commons-9.9.jar picocli-4.
   set "CP=!CP!;%ROOT%\tools\junit\%%J"
 )
 if defined MISSING (
-  echo missing jars under tools\junit - see tools\run-tests.ps1 header for the list >&2
+  echo missing jars under tools\junit - see tools\windows\run-tests.ps1 header for the list >&2
   exit /b 1
 )
 

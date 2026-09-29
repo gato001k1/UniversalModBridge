@@ -2,7 +2,7 @@
 # dev.umb.bridge.api contract the 1.7.10 module speaks). See README.md and
 # research/out/legacy-1122/ERA-1122-PLAN.md for what this module does and does NOT do yet.
 #
-# Four compilation units, same discipline as umb-legacy/tools/build-legacy.ps1 and for the same
+# Four compilation units, same discipline as umb-legacy/tools/windows/build-legacy.ps1 and for the same
 # reason: anything that will eventually sit on the FML-scanned classpath must stay classfile major
 # <= 52 (ASM 5.2, the ASM Forge 1.12.2 itself bundles, refuses newer - verified: the fetched
 # forge-1.12.2-14.23.5.2860-universal.jar ships org/ow2/asm 5.2 per its own MANIFEST.MF Class-Path).

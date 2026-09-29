@@ -26,7 +26,25 @@ import org.objectweb.asm.Opcodes;
 import dev.umb.legacy.boot.LinkPreflight;
 import dev.umb.legacy.boot.SrgFieldRepair;
 
-/** Legacy compatibility behavior. */
+/**
+ * F0 gate (DESIGN.md "F0 - SrgFieldRepair"). Runs the real offline repair against the real
+ * {@code 1.7.10-forge-srg-runtime-clean.jar} (produced by {@code tools/windows/build-legacy.ps1} step 0)
+ * and asserts:
+ * <ol>
+ *   <li>{@code Slot} declares {@code field_75222_d} and {@code field_75225_a};</li>
+ *   <li>{@code InventoryPlayer} declares {@code field_70458_d}, {@code field_70462_a},
+ *       {@code field_70461_c};</li>
+ *   <li>{@code WorldProvider} declares {@code field_76574_g};</li>
+ *   <li>{@code Slot.getSlotIndex()I} exists and reads {@code field_75225_a};</li>
+ *   <li>a link pre-flight over the bridge's class set (the M1 critical-path classes traced in
+ *       {@code twin-first-mvp} sections 1/4/5/6 - World/WorldServer/WorldProvider/EntityPlayer/
+ *       EntityPlayerMP/InventoryPlayer/TileEntity/Container/Slot/ItemStack/Item/Block/IInventory)
+ *       reports 0 missing members against HBM.</li>
+ * </ol>
+ *
+ * <p>The repair is re-run here (not merely read back) so this test is self-contained and always
+ * reflects the current code, matching the build's own idempotent-artifact discipline.</p>
+ */
 class SrgFieldRepairTest {
 
     private static SrgFieldRepair.Result RESULT;
@@ -51,7 +69,7 @@ class SrgFieldRepairTest {
         HBM_JAR = repo.resolve("research/mods-hbm/HBM-NTM-1.0.27_X5771.jar").toFile();
 
         assertTrue(Files.isRegularFile(srg), "missing " + srg);
-        assertTrue(cleanJar.isFile(), "missing " + cleanJar + " - run tools/build-legacy.ps1 first");
+        assertTrue(cleanJar.isFile(), "missing " + cleanJar + " - run tools/windows/build-legacy.ps1 first");
 
         RESULT = SrgFieldRepair.repair(srg, cleanJar, FIELDS_JAR);
         System.out.println("[SrgFieldRepairTest] " + RESULT.summary());
@@ -61,7 +79,7 @@ class SrgFieldRepairTest {
     void repairTouchesAMeaningfulNumberOfClasses() {
         // Both lens documents independently measured 532-597 affected classes with slightly
         // different criteria; this asserts the repair is doing REAL, substantial work without
-        // quoting either lens's exact number
+        // quoting either lens's exact number (DESIGN.md: "report YOUR measured number").
         assertTrue(RESULT.classesTouched > 400, "expected several hundred classes touched, got "
                 + RESULT.classesTouched);
         assertTrue(RESULT.fieldDeclarationsRenamed >= RESULT.classesTouched, "expected at least one "
@@ -164,7 +182,15 @@ class SrgFieldRepairTest {
         }
     }
 
-/** Legacy compatibility behavior. */
+    /**
+     * The M1 critical-path class set, per twin-first-mvp.md sections 1/4/5/6 and
+     * facade-fidelity.md sections 2/3/4/5 - the classes Lane A's own facades and shims actually
+     * touch. Scoped narrower than "every net.minecraft reference in HBM" deliberately: both lens
+     * documents independently found ~8 pre-existing method gaps in unrelated classes
+     * (WorldProviderSurface client rendering, AnvilChunkLoader chunk IO) that are out of M1 scope
+     * and not fixed by this repair - see the final report for this flagged interpretation of
+     * DESIGN.md's "the bridge's class set".
+     */
     private static final Set<String> BRIDGE_CLASS_SET = Set.of(
             "net/minecraft/world/World",
             "net/minecraft/world/WorldServer",
@@ -181,8 +207,13 @@ class SrgFieldRepairTest {
             "net/minecraft/block/Block");
 
     /**
- * Two pre-existing gaps, unrelated to field repair: {@code WorldProvider.getSkyRenderer}/ {@code setSkyRenderer} are Forge-added client-render methods whose Forge class patch is missing from this jar's dump (twin-first-mvp.md section 2: "6 are client-render...
- */
+     * Two pre-existing gaps, unrelated to field repair: {@code WorldProvider.getSkyRenderer}/
+     * {@code setSkyRenderer} are Forge-added client-render methods whose Forge class patch is
+     * missing from this jar's dump (twin-first-mvp.md section 2: "6 are client-render or chunk-IO
+     * only"; measured there against the un-repaired jar too). Not on the M1 path (HBM only touches
+     * them from its client-side sky-rendering code) and not something a FIELD rename can fix -
+     * flagged explicitly rather than silently narrowing the class set further.
+     */
     private static final Set<LinkPreflight.Ref> KNOWN_UNRELATED_GAPS = Set.of(
             new LinkPreflight.Ref("net/minecraft/world/WorldProvider", "getSkyRenderer",
                     "()Lnet/minecraftforge/client/IRenderHandler;", false),
@@ -192,7 +223,7 @@ class SrgFieldRepairTest {
     @Test
     void linkPreflightOverTheBridgeClassSetIsZero() throws IOException {
         assertTrue(HBM_JAR.isFile(), "missing " + HBM_JAR);
-        assertTrue(FORGE_SRG_JAR.isFile(), "missing " + FORGE_SRG_JAR + " - run tools/build-legacy.ps1 first");
+        assertTrue(FORGE_SRG_JAR.isFile(), "missing " + FORGE_SRG_JAR + " - run tools/windows/build-legacy.ps1 first");
 
         LinkPreflight.Report report = LinkPreflight.runForOwners(
                 List.of(HBM_JAR), List.of(FIELDS_JAR, FORGE_SRG_JAR), BRIDGE_CLASS_SET);

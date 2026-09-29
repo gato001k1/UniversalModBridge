@@ -2,7 +2,7 @@
 # geometry in Minecraft 26.2 (items via a umb:obj client-item model type, blocks via a splice into
 # the live block-state model map), plus dev.umb.objbridge.gen.ObjPackGen.
 #
-#   powershell -NoProfile -ExecutionPolicy Bypass -File tools\build-objbridge.ps1
+#   powershell -NoProfile -ExecutionPolicy Bypass -File tools\windows\build-objbridge.ps1
 #
 # Compiles on JDK 25 ONLY (research\jars\26.2\client.jar is classfile major 69).
 # gson is compiled against the EXACT jar on the game classpath.
@@ -12,7 +12,7 @@
 # This script never touches umb-hostagent/ or build\hostagent\.
 $ErrorActionPreference = 'Stop'
 
-$repo = Split-Path -Parent $PSScriptRoot
+$repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $jdk25 = Join-Path $repo 'tools\jdk-25.0.4.1+1\bin'
 $javac = Join-Path $jdk25 'javac.exe'
 $jar = Join-Path $jdk25 'jar.exe'

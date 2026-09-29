@@ -1,9 +1,9 @@
 # JUnit gate for umb-hostagent. JDK 25 only (client.jar is classfile major 69).
-#   powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-hostagent-tests.ps1
+#   powershell -NoProfile -ExecutionPolicy Bypass -File tools\windows\run-hostagent-tests.ps1
 param([switch]$Conformance)
 $ErrorActionPreference = 'Stop'
 
-$repo = Split-Path -Parent $PSScriptRoot
+$repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $jdk25 = Join-Path $repo 'tools\jdk-25.0.4.1+1\bin'
 $javac = Join-Path $jdk25 'javac.exe'
 $java = Join-Path $jdk25 'java.exe'
@@ -16,7 +16,7 @@ $testClasses = Join-Path $repo 'build\hostagent\test-classes'
 $agentJar = Join-Path $repo 'build\hostagent\umb-hostagent.jar'
 
 foreach ($p in @($javac, $java, $junit, $cpFile, $mainClasses, $agentJar)) {
-  if (-not (Test-Path $p)) { Write-Error ("missing: " + $p + " (run tools\build-hostagent.ps1 first)"); exit 1 }
+  if (-not (Test-Path $p)) { Write-Error ("missing: " + $p + " (run tools\windows\build-hostagent.ps1 first)"); exit 1 }
 }
 
 $rawGameCp = (Get-Content $cpFile -Raw).Trim()
@@ -133,7 +133,7 @@ $rc2 = $LASTEXITCODE
 # empirically while building this test: swapping to `--class-path` reproduces that split-loader
 # failure instead of the real bug). Passing a real `-cp` + the launcher's actual main class instead
 # keeps this single-classloader, exactly like a real java/game process (and like
-# tools/probe-hostagent.ps1's own agent-attached invocation) -- confirmed this is what reproduces
+# tools/windows/probe-hostagent.ps1's own agent-attached invocation) -- confirmed this is what reproduces
 # the EXACT live IllegalAccessError pre-fix.
 Write-Output '--- run 3: UmbMenuAdapterCrossLoaderTest + UmbMenuContentParityTest (real -javaagent attached, widener active) ---'
 $agentLog = Join-Path $repo 'build\hostagent\test-agent.log'
