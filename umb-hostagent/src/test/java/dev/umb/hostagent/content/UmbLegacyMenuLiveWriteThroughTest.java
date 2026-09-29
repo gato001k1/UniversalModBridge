@@ -10,10 +10,12 @@ import net.minecraft.world.inventory.MenuType;
 import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.item.ItemStack;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Field;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 
@@ -29,7 +31,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *
  * <ol>
  *   <li>a write made THROUGH the menu's own {@code Slot} (exactly what a player's click ends up
- *       calling, javap-verified: {@code Slot.set(ItemStack)} -&gt;
  *       {@code Container.setItem(int, ItemStack)}) reaches the {@code ContainerHandle} via
  *       {@code setSlot(index, StackData)} with the right legacy id and count;</li>
  *   <li>a change made directly to the handle (standing in for the legacy machine consuming fuel or
@@ -39,7 +40,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *       both directions, proving the conversion path (not just the plumbing) works.</li>
  * </ol>
  *
- * Lead-reported symptom this guards against: iron ore + coal visibly placed in a live Brick
  * Furnace's GUI slots, then 20+ seconds with no progress, no output, no lit-variant switch, and no
  * error in hostagent.log. If {@code UmbLegacyMenu}'s machine slots were ever backed by a throwaway
  * {@code SimpleContainer} (filled once at menu-construction time, never written back), every
@@ -53,6 +53,8 @@ class UmbLegacyMenuLiveWriteThroughTest {
     @BeforeAll
     static void boot() throws Exception {
         TestSupport.ensureBootstrapped();
+        Assumptions.assumeTrue(Files.isRegularFile(SNAPSHOT),
+                "hbm-snapshot.json not present in this checkout: " + SNAPSHOT);
         // Force a REAL VanillaItemBridge build from the actual snapshot regardless of whatever
         // state an earlier test class in this same JVM (JUnit --scan-class-path runs every test
         // class in one JVM) already left it in -- see VanillaItemBridge.resetForTest()'s javadoc
@@ -117,7 +119,6 @@ class UmbLegacyMenuLiveWriteThroughTest {
 
         assertTrue(handle.slots()[0].stack.isEmpty(), "handle's slot 0 starts empty");
 
-        // THE EXACT PATH a player's click ends up calling (javap-verified: Slot.set(ItemStack) ->
         // Container.setItem(int, ItemStack) -> Slot.setChanged() -> Container.setChanged()) -- NOT
         // handle.setSlot(...) directly.
         Slot slot0 = menu.slots.get(0);

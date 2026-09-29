@@ -7,12 +7,14 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 
 import org.junit.jupiter.api.Test;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 class Legacy1122BootstrapMappingTest {
 
     @Test
     void joinedSrgGroundsNotchBootstrapClassAndMethod() throws Exception {
         File mapping = new File(TestRepo.find(), "research/mappings/joined-1.12.2.srg");
+        assumeTrue(mapping.isFile(), "joined-1.12.2.srg not present - skipping mapping probe");
         String text = Files.readString(mapping.toPath(), StandardCharsets.UTF_8);
         assertTrue(text.contains("CL: ni net/minecraft/init/Bootstrap"),
                 "joined SRG must ground the 1.12.2 Bootstrap class");

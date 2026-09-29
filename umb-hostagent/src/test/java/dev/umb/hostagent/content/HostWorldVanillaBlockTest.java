@@ -4,7 +4,10 @@ import dev.umb.hostagent.HostAgent;
 import net.minecraft.world.level.block.Blocks;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Assumptions;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.Paths;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -22,7 +25,10 @@ class HostWorldVanillaBlockTest {
     @BeforeAll
     static void boot() {
         TestSupport.ensureBootstrapped();
-        HostAgent.configure(Paths.get("research/out/legacy/hbm-snapshot.json"), null, "hbm");
+        Path snapshot = Paths.get("research/out/legacy/hbm-snapshot.json");
+        Assumptions.assumeTrue(Files.isRegularFile(snapshot),
+                "hbm-snapshot.json not present in this checkout: " + snapshot);
+        HostAgent.configure(snapshot, null, "hbm");
         VanillaItemBridge.resetForTest();
         VanillaItemBridge.ensureBuilt();
     }

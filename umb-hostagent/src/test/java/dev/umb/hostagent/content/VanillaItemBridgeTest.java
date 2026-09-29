@@ -5,10 +5,12 @@ import dev.umb.hostagent.HostAgent;
 import net.minecraft.core.component.DataComponentMap;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import java.nio.file.Path;
+import java.nio.file.Files;
 import java.nio.file.Paths;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -18,9 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * G2-vanilla-bridge gate: {@link VanillaItemBridge} + its wiring into {@link LegacyStackConv}.
  *
- * Before this lane's fix, {@code LegacyStackConv} had NO mapping at all for {@code minecraft:*}
  * items -- {@code toLegacy(minecraft:coal)} produced {@code StackData.EMPTY}, which is exactly why
- * HBM's Brick Furnace could never be fuelled (see research/out/legacy/win-m3/logs/hostagent.log:42-44,
  * "ERROR LegacyStackConv.toLegacy: no legacy id for native item minecraft:oak_log/coal_block/iron_ore").
  * {@link #coalRoundTripsNativeLegacyNative()} below is that exact regression, pinned down: run
  * against the pre-fix code (LegacyStackConv without the VanillaItemBridge lookups) it fails with
@@ -35,6 +35,8 @@ class VanillaItemBridgeTest {
     @BeforeAll
     static void boot() {
         TestSupport.ensureBootstrapped();
+        Assumptions.assumeTrue(Files.isRegularFile(SNAPSHOT),
+                "hbm-snapshot.json not present in this checkout: " + SNAPSHOT);
         // Force a REAL build from the actual snapshot regardless of whatever state an earlier
         // test class in this same JVM (JUnit --scan-class-path runs every test class in one JVM)
         // already left VanillaItemBridge in -- see resetForTest()'s javadoc.
@@ -60,8 +62,6 @@ class VanillaItemBridgeTest {
 
     @Test
     void identitySetSizeIsPinnedSoASnapshotOrRegistryRegressionIsCaught() {
-        // research/out/legacy/hbm-snapshot.json's items[] holds exactly 315 minecraft:* records
-        // (lead-verified, see task brief). If this ever changes -- a re-dumped snapshot, or a
         // 26.2 jar upgrade that renames/removes one of the 26.2 ids VanillaItemBridge depends on
         // -- this fails LOUDLY instead of silently mis-converting items.
         assertEquals(315, VanillaItemBridge.totalCount, "total minecraft:* records in the snapshot");
@@ -72,7 +72,6 @@ class VanillaItemBridgeTest {
 
     @Test
     void coalRoundTripsNativeLegacyNative() {
-        // The fuel item the lead's live smelt test needs: minecraft:coal is a straight IDENTITY
         // match (the 1.7.10 id string is still "minecraft:coal" on 26.2), no RENAME_TABLE entry
         // needed for damage 0.
         ItemStack native1 = new ItemStack(Items.COAL, 37);
@@ -106,7 +105,6 @@ class VanillaItemBridgeTest {
 
     @Test
     void ironOreRoundTripsNativeLegacyNative() {
-        // The furnace INPUT the lead's live smelt test needs: minecraft:iron_ore, also a straight
         // identity match (still "minecraft:iron_ore" on 26.2 -- the ORE BLOCK's id never changed;
         // only what it DROPS when mined/smelted changed, which is irrelevant to stack conversion).
         ItemStack native1 = new ItemStack(Items.IRON_ORE, 12);

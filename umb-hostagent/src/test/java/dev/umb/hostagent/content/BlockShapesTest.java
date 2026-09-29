@@ -5,12 +5,12 @@ import net.minecraft.world.phys.shapes.Shapes;
 import net.minecraft.world.phys.shapes.VoxelShape;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Assumptions;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Task A gate: {@link BlockShapes#build} against both a vanilla control (per the lead's own
  * suggestion: a stone-slab-shaped and an oak-stairs-shaped synthetic group) and the two real HBM
  * shapes this session's out-of-cell decision was written for
  * ({@code hbm:tile.machine_purex} = full cube, {@code hbm:tile.launch_pad_large} meta 12 =
@@ -36,7 +36,6 @@ class BlockShapesTest {
     @Test
     void isFullCubeGroupIsTheDefaultFullCubeEvenWithBoxesPresent() {
         // hbm:tile.machine_purex: isOpaqueCube=false, renderAsNormalBlock=false, but isFullCube=true -
-        // the honest limit the lead's brief calls out: never invent a bigger shape for it.
         BlockShapeProfile.MetaGroup purex = group(new int[]{0}, new double[]{0, 0, 0, 1, 1, 1},
                 new double[]{0, 0, 0, 1, 1, 1}, new double[][]{{0, 0, 0, 1, 1, 1}}, true);
         VoxelShape shape = BlockShapes.build(purex);
@@ -65,7 +64,6 @@ class BlockShapesTest {
     @Test
     void vanillaControlOakStairsShapedGroupUnionsBothBoxes() {
         // minecraft:oak_stairs (south/bottom-half ascending): 2 boxes - a full-width bottom slab
-        // plus a back half-depth top slab, exactly the "2 boxes" shape the lead named.
         BlockShapeProfile.MetaGroup stairs = group(new int[]{0}, null, null, new double[][]{
                 {0, 0, 0, 1, 0.5, 1},
                 {0, 0.5, 0, 1, 1, 0.5},
@@ -86,7 +84,6 @@ class BlockShapesTest {
         // EXACTLY -4.0 or 5.0 - the probe's own query-window edge (BlockShapeProbe: SYNTH_Y=4, a
         // +-4/+5 mask) - so BlockShapes.isUnclamped must NOT trust this as the block's complete
         // declared shape (a real structure this size could easily extend further; the extractor
-        // would never have found the rest). This is the multiblock-notes lane's "one safety gate":
         // declaresOutOfCellShape is true here, isUnclamped is false, and the OLD clamp behaviour
         // this test originally asserted is therefore unchanged - it just now holds for the RIGHT,
         // checked reason instead of an unconditional one.
@@ -123,7 +120,6 @@ class BlockShapesTest {
         // MULTIBLOCK-LANE.md): a base full-ish box plus a second box whose Y reaches from 1.0 to
         // 4.0 - a real "chimney" extending 3 cells above the controller's own position, declared by
         // the block's own func_149743_a (addCollisionBoxesToList), well inside the extractor's
-        // +-4/+5 query window (nowhere near -4.0 or 5.0) - i.e. exactly the case this lane's new
         // unclamp path exists for.
         BlockShapeProfile.MetaGroup centrifuge = group(new int[]{12, 13, 14, 15},
                 new double[]{0, 0, 0, 1, 0.999, 1}, new double[]{0, 0, 0, 1, 0.999, 1},
@@ -147,7 +143,6 @@ class BlockShapesTest {
     @Test
     void anOrdinaryFullCubeBlockIsNeverTreatedAsOutOfCellOrUnclamped() {
         // Regression guard: the overwhelming majority of 1.7.10 blocks are genuinely one cube -
-        // this must stay false for them so they never get a huge hitbox from this lane's change.
         BlockShapeProfile.MetaGroup ordinary = group(new int[]{0}, new double[]{0, 0, 0, 1, 1, 1},
                 new double[]{0, 0, 0, 1, 1, 1}, new double[][]{{0, 0, 0, 1, 1, 1}}, false);
         assertTrue(!BlockShapes.declaresOutOfCellShape(ordinary));
@@ -196,7 +191,6 @@ class BlockShapesTest {
         assertEquals(0, BlockShapes.contributingBoxCount(empty));
     }
 
-    // ---- no-collision lane (LIVE-GAP-ANALYSIS.md section 4): 1.7.10 signals "walk-through" by
     // func_149668_a returning null, recorded by the extractor as an EXPLICIT "collisionAabb":null
     // with an empty collisionBoxes list. buildCollision must turn exactly that into
     // Shapes.empty() while build (outline/selection) keeps its non-empty shape. ----
@@ -205,7 +199,6 @@ class BlockShapesTest {
     void spikesShapedExplicitNullCollisionGroupGetsEmptyCollisionButKeepsItsClickableOutline() {
         // real hbm:tile.spikes data: rawBounds/selection = full cube, collisionAabb EXPLICIT null,
         // collisionBoxes [], isFullCube false - you must be able to walk into it (and get hurt by
-        // the entity-contact lane later), but still click/target/break it.
         BlockShapeProfile.MetaGroup spikes = explicitNullCollisionGroup(
                 new double[]{0, 0, 0, 1, 1, 1}, new double[][]{}, false);
         assertTrue(BlockShapes.hasNoCollision(spikes), "explicit-null aabb + no boxes = recorded no-collision");
@@ -248,13 +241,12 @@ class BlockShapesTest {
 
     @Test
     void corpusExactly276Of1900MetaGroupsRecordNoCollisionAndAllBuildEmptyCollision() {
-        // THE acceptance gate for this lane, against the REAL extracted corpus - not a synthetic.
         // Baseline independently verified twice before writing this test: 276 explicit
         // "collisionAabb":null occurrences in the raw JSON text, over 1900 total collisionAabb
         // keys; zero of the 276 are isFullCube/opaque/errored (LIVE-GAP-ANALYSIS.md section 4).
         java.nio.file.Path file = java.nio.file.Path.of("research", "out", "legacy", "block-shapes.json");
-        assertTrue(java.nio.file.Files.isRegularFile(file),
-                "run from the repo root (run-hostagent-tests.ps1 does Push-Location $repo): " + file.toAbsolutePath());
+        Assumptions.assumeTrue(java.nio.file.Files.isRegularFile(file),
+                "block-shapes.json not present in this checkout: " + file.toAbsolutePath());
         BlockShapeProfile profile = BlockShapeProfile.load(file);
         int totalGroups = 0, noCollision = 0, emptyBuilt = 0, outlinesKeptNonEmpty = 0;
         for (BlockShapeProfile.BlockEntry be : profile.entries()) {

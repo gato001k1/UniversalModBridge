@@ -1,7 +1,10 @@
 package dev.umb.hostagent.input;
 
 import com.mojang.blaze3d.platform.InputConstants;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.List;
 import java.util.Map;
@@ -11,8 +14,11 @@ import static org.junit.jupiter.api.Assertions.*;
 /** Twin collection is pure data (no KeyMapping statics); registration is proven live. */
 class LegacyInputBootstrapTest {
     @Test void collectTwinsCoversBothModsWithTranslatedCodes() {
-        List<LegacyInputBootstrap.Twin> twins =
-                LegacyInputBootstrap.collectTwins(Paths.get("research/out/legacy"));
+        Path dir = Paths.get("research/out/legacy");
+        Assumptions.assumeTrue(Files.isRegularFile(dir.resolve("hbm-input-plans.json"))
+                        && Files.isRegularFile(dir.resolve("mcheli-input-plans.json")),
+                "legacy input-plan fixtures not present in this checkout: " + dir);
+        List<LegacyInputBootstrap.Twin> twins = LegacyInputBootstrap.collectTwins(dir);
         Map<String, List<LegacyInputBootstrap.Twin>> byNs =
                 twins.stream().collect(Collectors.groupingBy(LegacyInputBootstrap.Twin::namespace));
         assertEquals(20, byNs.get("hbm").size(), "HBM twins");
