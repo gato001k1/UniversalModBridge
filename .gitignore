@@ -12,6 +12,9 @@ tools/*
 !tools/*.java
 !tools/forge-1710-launch-classpath.txt
 !tools/forge-1710-library-sha1.txt
+!tools/windows/
+!tools/README.md
+!tools/pack200/
 
 # Downloaded Minecraft/Forge jars, mappings and generated data (tools/ci-fetch.ps1)
 research/
