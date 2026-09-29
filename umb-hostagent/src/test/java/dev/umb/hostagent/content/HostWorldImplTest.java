@@ -225,7 +225,16 @@ class HostWorldImplTest {
     }
 
     @Test
-    void vehicleChainLookupAcceptsDirectAndNestedSeatLinks() throws Exception {
+    void vehicleChainLookupAcceptsDirectLinksButNotAcrossANestedTwinBoundary() throws Exception {
+        // TRUE for the "root" case below - that assertion was pinning the EXACT live bug (a fresh
+        // AH-1Z's gunner ended up positioned at the pilot's spot the moment a rider boarded the
+        // seat). vehicleChainContains(seat, root) walking straight through the nested `seat` twin
+        // to reach its OWN ancestor `root` let the aircraft's prepareEntity/findServerPassenger
+        // treat the gunner (whose real, direct vehicle is the SEAT) as if it were the aircraft's
+        // own rider, corrupting the aircraft's legacy riddenByEntity and re-running its
+        // hardcoded-to-the-pilot updateRiderPosition on the real player. A rider's DIRECT vehicle
+        // link (one hop) must still be recognized; only walking PAST a nested legacy twin to a
+        // more distant ancestor is now rejected.
         Entity root = TestSupport.allocate(UmbLegacyEntity.class);
         Entity seat = TestSupport.allocate(UmbLegacyEntity.class);
         Entity player = TestSupport.allocate(UmbLegacyEntity.class);
@@ -234,8 +243,10 @@ class HostWorldImplTest {
 
         vehicle.set(player, seat);
         vehicle.set(seat, root);
-        assertTrue(HostWorldImpl.vehicleChainContains(player.getVehicle(), root));
-        assertTrue(HostWorldImpl.vehicleChainContains(player.getVehicle(), seat));
+        assertFalse(HostWorldImpl.vehicleChainContains(player.getVehicle(), root),
+                "a rider whose vehicle is a NESTED legacy twin must not be attributed to that twin's own ancestor");
+        assertTrue(HostWorldImpl.vehicleChainContains(player.getVehicle(), seat),
+                "a rider's DIRECT vehicle link must still be recognized");
         assertFalse(HostWorldImpl.vehicleChainContains(null, root));
     }
 
@@ -339,5 +350,87 @@ class HostWorldImplTest {
     @Test
     void queryableNativeEntityRejectsANullEntity() {
         assertFalse(HostWorldImpl.isQueryableNativeEntity(null, null));
+    }
+
+    // ------------------------------------------ ENTITY-BRIDGE: nested legacy-twin rider boundary
+    //
+    // evidence): a fresh AH-1Z's gunner seat placed BOTH the seat and its player rider at the
+    // PILOT's offset - once, and only once, a rider actually boarded the seat. Root cause:
+    // findServerPassenger's downward recursion (used by prepareEntity/syncEntity to discover
+    // "who is MY own direct native rider") walked straight PAST the seat twin (a UmbLegacyEntity,
+    // native passenger of the aircraft twin per the multiseat "aircraft twins keep their seat-twin
+    // passengers" design) to find the real gunner PLAYER three hops down, and handed that player
+    // to the AIRCRAFT's own EntityHandle.setHostRider - corrupting the real MCHeli aircraft's own
+    // field_70153_n with a rider it was never meant to have, which made
+    // EntityHandleImpl.riderOffset() run the AIRCRAFT's own updateRiderPosition (hardcoded to
+    // seatsInfo[0], the pilot) and re-mounted the real native player directly onto the aircraft
+    // twin. vehicleChainContains had the matching upward-walk version of the same bug. These
+    // tests pin the fix: a nested legacy twin (a seat) owns its own rider independently - an
+    // ancestor legacy twin (the aircraft) must never see through it.
+    //
+    // A real ServerLevel entity graph is not available headlessly (R8); Unsafe-allocated
+    // instances with only the two fields these methods actually read (`vehicle`, `passengers`)
+    // reflectively seeded is the same idiom UmbLegacyPartTwinTest already established for this
+    // exact class of test.
+
+    private static void seedVehicle(Entity child, Entity vehicle) throws Exception {
+        java.lang.reflect.Field f = Entity.class.getDeclaredField("vehicle");
+        f.setAccessible(true);
+        f.set(child, vehicle);
+    }
+
+    private static void seedPassengers(Entity parent, Entity... passengers) throws Exception {
+        java.lang.reflect.Field f = Entity.class.getDeclaredField("passengers");
+        f.setAccessible(true);
+        f.set(parent, com.google.common.collect.ImmutableList.copyOf(passengers));
+    }
+
+    private static java.util.Set<Entity> identitySet() {
+        return java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+    }
+
+    @Test
+    void findServerPassengerDoesNotSeeThroughANestedLegacyTwin() throws Exception {
+        UmbLegacyEntity aircraftTwin = TestSupport.allocate(UmbLegacyEntity.class);
+        UmbLegacyEntity seatTwin = TestSupport.allocate(UmbLegacyEntity.class);
+        net.minecraft.server.level.ServerPlayer gunner =
+                TestSupport.allocate(net.minecraft.server.level.ServerPlayer.class);
+        seedPassengers(aircraftTwin, seatTwin);
+        seedPassengers(seatTwin, gunner);
+        seedVehicle(seatTwin, aircraftTwin);
+        seedVehicle(gunner, seatTwin);
+
+        assertNull(HostWorldImpl.findServerPassenger(aircraftTwin, identitySet(), 0),
+                "the aircraft must not discover the gunner riding its child seat twin as its own direct rider");
+        assertSame(gunner, HostWorldImpl.findServerPassenger(seatTwin, identitySet(), 0),
+                "the seat's own search must still find its own direct rider");
+    }
+
+    @Test
+    void findServerPassengerStillWalksThroughANonLegacyTwinPassthroughEntity() throws Exception {
+        // The recursion must stay intact for genuinely non-legacy-twin helper entities (the case
+        // it originally existed for) - only a nested UmbLegacyEntity is a new stop boundary.
+        UmbLegacyEntity ancestorTwin = TestSupport.allocate(UmbLegacyEntity.class);
+        UmbLegacyPartTwin passthroughHelper = TestSupport.allocate(UmbLegacyPartTwin.class);
+        net.minecraft.server.level.ServerPlayer rider =
+                TestSupport.allocate(net.minecraft.server.level.ServerPlayer.class);
+        seedPassengers(ancestorTwin, passthroughHelper);
+        seedPassengers(passthroughHelper, rider);
+
+        assertSame(rider, HostWorldImpl.findServerPassenger(ancestorTwin, identitySet(), 0),
+                "a non-legacy-twin passthrough entity must still be walked through, unchanged");
+    }
+
+    @Test
+    void vehicleChainContainsStopsAtANestedLegacyTwinBoundary() throws Exception {
+        UmbLegacyEntity aircraftTwin = TestSupport.allocate(UmbLegacyEntity.class);
+        UmbLegacyEntity seatTwin = TestSupport.allocate(UmbLegacyEntity.class);
+        seedVehicle(seatTwin, aircraftTwin);
+
+        assertFalse(HostWorldImpl.vehicleChainContains(seatTwin, aircraftTwin),
+                "a rider whose vehicle is the SEAT must not be attributed to the aircraft, even"
+                        + " though the seat natively rides the aircraft too");
+        assertTrue(HostWorldImpl.vehicleChainContains(seatTwin, seatTwin),
+                "a chain trivially contains its own starting root");
     }
 }

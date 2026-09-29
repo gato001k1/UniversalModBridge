@@ -41,8 +41,13 @@ import dev.umb.legacy.legacyside.input.LegacyKeyBindingRegistry;
 import dev.umb.legacy.legacyside.input.LegacyLwjglState;
 
 /**
- * plan-driven KeyBinding synthesis, the player-contextual LWJGL2 mirror state, the per-tick dispatch mirror (held + press edge + input events), and the UmbShimTransformer LWJGL2 rewrites.
- * <p>No game, no display, no native libraries: every test runs in the...
+ * player-contextual LWJGL2 mirror state, the per-tick dispatch mirror (held + press
+ * edge + input events), and the UmbShimTransformer LWJGL2 rewrites.
+ *
+ * <p>No game, no display, no native libraries: every test runs in the plain JUnit JVM.
+ * Synthesis tests use a hermetic fixture (system property {@code umb.inputPlans} pointed
+ * at a temp dir) except the two real-data tests, which read the repo files by explicit
+ * path and assert their exact shape.</p>
  */
 class LegacyInputBridgeTest {
     private static final Path REPO_PLANS = Paths.get("research/out/legacy/hbm-input-plans.json");
@@ -109,7 +114,6 @@ class LegacyInputBridgeTest {
         assertEquals(124, defaults);
         int count = LegacyKeyBindingSynthesis.installFile(REPO_MCHELI_PLANS);
         assertEquals(124, count);
-// Legacy compatibility behavior.
         // heli KeyUseWeapon <- KeyUseWeapon default -99 (middle mouse).
         assertEquals(Integer.valueOf(19), LegacyKeyBindingSynthesis.codeFor(
                 "legacy:key:mcheli:mcheli/aircraft/MCH_AircraftClientTickHandler#KeyGUI"));
@@ -178,6 +182,9 @@ class LegacyInputBridgeTest {
         } finally {
             LegacyLwjglState.end();
         }
+        // A client tick has observed the press (the latch for taps shorter than a tick is
+        // covered by LegacyKeyTapLatchTest); after it, release clears the level.
+        LegacyLwjglState.clientTickDone("p1");
         LegacyLwjglState.setDown("p1", 30, false);
         LegacyLwjglState.begin("p1");
         try {

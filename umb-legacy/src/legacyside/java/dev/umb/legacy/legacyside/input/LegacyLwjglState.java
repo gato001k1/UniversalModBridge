@@ -37,6 +37,12 @@ public final class LegacyLwjglState {
 
     private static final class PlayerState {
         final Map<Integer, Boolean> down = new HashMap<Integer, Boolean>();
+        /**
+         * Codes pressed since the last legacy client tick. Level pollers (Keyboard.isKeyDown,
+         * Mouse.isButtonDown) run once per client tick; a press and its release can both arrive
+         * between two ticks, and without this latch the tick never sees the key at all.
+         */
+        final Set<Integer> pressedSinceTick = new HashSet<Integer>();
         final Deque<KeyEvent> keyboardQueue = new ArrayDeque<KeyEvent>();
         final Deque<KeyEvent> mouseQueue = new ArrayDeque<KeyEvent>();
         int lastKey;
@@ -103,6 +109,9 @@ public final class LegacyLwjglState {
                 return;
             }
             s.down.put(Integer.valueOf(lwjglCode), Boolean.valueOf(down));
+            if (down) {
+                s.pressedSinceTick.add(Integer.valueOf(lwjglCode));
+            }
             Deque<KeyEvent> queue = lwjglCode < 0 ? s.mouseQueue : s.keyboardQueue;
             queue.addLast(new KeyEvent(lwjglCode, down));
             while (queue.size() > QUEUE_CAP) {
@@ -139,6 +148,31 @@ public final class LegacyLwjglState {
         }
     }
 
+    /**
+     * Ends one legacy client tick for {@code player}: presses already observed by that tick's
+     * level polls stop reading as down unless the key is still held. Call after the tick's
+     * events ran (the dispatcher does, once per client tick).
+     */
+    public static void clientTickDone(String player) {
+        if (player == null) {
+            return;
+        }
+        PlayerState s = STATES.get(player);
+        if (s == null) {
+            return;
+        }
+        synchronized (s) {
+            s.pressedSinceTick.clear();
+        }
+    }
+
+    /** Held now, or pressed (and maybe already released) since the last client tick. */
+    private static boolean levelOrLatched(PlayerState s, int code) {
+        Boolean down = s.down.get(Integer.valueOf(code));
+        return (down != null && down.booleanValue())
+                || s.pressedSinceTick.contains(Integer.valueOf(code));
+    }
+
     /** Drops all state for {@code player} (disconnect hygiene; entries are otherwise tiny). */
     public static void clearPlayer(String player) {
         if (player != null) {
@@ -158,8 +192,7 @@ public final class LegacyLwjglState {
             return false;
         }
         synchronized (s) {
-            Boolean down = s.down.get(Integer.valueOf(code));
-            boolean result = down != null && down.booleanValue();
+            boolean result = levelOrLatched(s, code);
             if (result) {
                 String queryKey = "legacy-key-query:" + CURRENT.get() + ":" + code;
                 if (LegacyInputDiag.oncePer(queryKey, 100_000_000L)) {
@@ -319,7 +352,7 @@ public final class LegacyLwjglState {
         }
         synchronized (s) {
             Boolean down = s.down.get(Integer.valueOf(lwjglCode));
-            boolean result = down != null && down.booleanValue();
+            boolean result = levelOrLatched(s, lwjglCode);
             if (LegacyInputDiag.oncePer("legacy-mouse-query:" + player + ":" + button,
                     1_000_000_000L)) {
                 LegacyInputDiag.log("legacy mouse query player=" + player + " button=" + button

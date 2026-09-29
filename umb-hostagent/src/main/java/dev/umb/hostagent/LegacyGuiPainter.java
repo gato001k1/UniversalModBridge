@@ -63,6 +63,15 @@ public final class LegacyGuiPainter {
             if (draw.state != null && !draw.state.enabledCaps.contains(GL_BLEND)) {
                 color |= 0xFF000000;
             }
+            if (isLineMode(draw.mode)) {
+                // Lines are outlines: HUD frames, brackets, pitch ladders. Grouping their vertices
+                // as quads or filling their bounds turned a LINE_LOOP frame into a solid box.
+                int lines = paintLines(gui, draw, left, top, width, height, color);
+                painted += lines;
+                if (sample != null && lines > 0) sample.filled(color);
+                endSample(sample, null);
+                continue;
+            }
             boolean wantsTexture = draw.state != null && draw.state.enabledCaps.contains(GL_TEXTURE_2D);
             boolean textured = wantsTexture && draw.texture != null && !draw.texture.isEmpty();
             boolean anyBlit = false;
@@ -155,6 +164,81 @@ public final class LegacyGuiPainter {
             endSample(sample, null);
         }
         endSampleBatch(sampling);
+        return painted;
+    }
+
+    static final int GL_LINES = GlEmulationSession.GL_LINES;
+    static final int GL_LINE_LOOP = GlEmulationSession.GL_LINE_LOOP;
+    static final int GL_LINE_STRIP = GlEmulationSession.GL_LINE_STRIP;
+
+    static boolean isLineMode(int mode) {
+        return mode == GL_LINES || mode == GL_LINE_LOOP || mode == GL_LINE_STRIP;
+    }
+
+    /**
+     * Vertex index pairs of a legacy line primitive: GL_LINES pairs (0,1),(2,3)...; GL_LINE_STRIP
+     * joins consecutive vertices; GL_LINE_LOOP also closes the last vertex back to the first.
+     */
+    static int[] lineSegments(int mode, int vertexCount) {
+        int n = Math.max(0, vertexCount);
+        if (mode == GL_LINES) {
+            int[] out = new int[(n / 2) * 2];
+            for (int i = 0; i < out.length; i++) out[i] = i;
+            return out;
+        }
+        if (n < 2 || (mode != GL_LINE_STRIP && mode != GL_LINE_LOOP)) return new int[0];
+        int segments = mode == GL_LINE_LOOP && n > 2 ? n : n - 1;
+        int[] out = new int[segments * 2];
+        for (int s = 0; s < segments; s++) {
+            out[s * 2] = s;
+            out[s * 2 + 1] = (s + 1) % n;
+        }
+        return out;
+    }
+
+    /**
+     * One-unit-wide rectangles {x0,y0,x1,y1} (panel coordinates, end exclusive) covering the
+     * segment, clipped to the panel. Axis-aligned segments are one rectangle; slanted ones are
+     * stepped one unit at a time (DDA), so a diagonal never becomes its bounding box.
+     */
+    static java.util.List<int[]> lineRects(float x0, float y0, float x1, float y1, int width, int height) {
+        java.util.List<int[]> out = new java.util.ArrayList<int[]>();
+        if (!finite(x0, y0, x1, y1)) return out;
+        int ax = (int) Math.floor(x0), ay = (int) Math.floor(y0);
+        int bx = (int) Math.floor(x1), by = (int) Math.floor(y1);
+        if (ax == bx || ay == by) {
+            addClipped(out, Math.min(ax, bx), Math.min(ay, by), Math.max(ax, bx) + 1, Math.max(ay, by) + 1,
+                    width, height);
+            return out;
+        }
+        int steps = Math.max(Math.abs(bx - ax), Math.abs(by - ay));
+        for (int i = 0; i <= steps; i++) {
+            float t = (float) i / steps;
+            int px = (int) Math.floor(x0 + (x1 - x0) * t), py = (int) Math.floor(y0 + (y1 - y0) * t);
+            addClipped(out, px, py, px + 1, py + 1, width, height);
+        }
+        return out;
+    }
+
+    private static void addClipped(java.util.List<int[]> out, int x0, int y0, int x1, int y1,
+                                   int width, int height) {
+        int cx0 = Math.max(0, x0), cy0 = Math.max(0, y0);
+        int cx1 = Math.min(width, x1), cy1 = Math.min(height, y1);
+        if (cx1 > cx0 && cy1 > cy0) out.add(new int[] {cx0, cy0, cx1, cy1});
+    }
+
+    private static int paintLines(GuiGraphicsExtractor gui, GlEmulationSession.Draw draw,
+                                  int left, int top, int width, int height, int color) {
+        int[] segments = lineSegments(draw.mode, draw.vertices.size());
+        int painted = 0;
+        for (int s = 0; s + 1 < segments.length; s += 2) {
+            GlEmulationSession.Vertex a = draw.vertices.get(segments[s]);
+            GlEmulationSession.Vertex b = draw.vertices.get(segments[s + 1]);
+            for (int[] r : lineRects(a.x, a.y, b.x, b.y, width, height)) {
+                gui.fill(left + r[0], top + r[1], left + r[2], top + r[3], color);
+                painted++;
+            }
+        }
         return painted;
     }
 

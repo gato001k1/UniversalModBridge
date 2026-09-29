@@ -86,6 +86,69 @@ public final class Legacy1122Loader extends LaunchClassLoader {
         }
     }
 
+    /**
+     * Overridden to redirect into {@link #addTransformerExclusion}: this loader is the sole
+     * authority over which names are parent-delegated ({@link #ALWAYS_PARENT}, fixed at
+     * construction) - a caller-supplied prefix never ADDS to that set - but the caller's underlying
+     * INTENT (wall 4: "this package must be its own island, exempt from the mod-instrumentation
+     * pipeline") is honored anyway, through the one mechanism that is actually safe in this era's
+     * single-isolated-loader design.
+     *
+     * <p>Real LaunchClassLoader normally lets ANY code holding a reference to it call this to add
+     * MORE parent-delegated prefixes - and real coremods use exactly that. Real Sponge Mixin's own
+     * bootstrap (MixinBooterPlugin.initialize() -&gt; installClassLoaderExclusionsAndTransformers,
+     * proven live via a reflection dump of {@code classLoaderExceptions} moments after it ran)
+     * calls this for its own packages (org.spongepowered.asm.mixin., .util., .launch., .service.,
+     * .logging., .lib., org.objectweb.asm., even zone.rong.mixinbooter.service.) - forcing those
+     * names to resolve via {@code parent} instead of this loader's own sources. That is the right
+     * call in a REAL Forge launch, where Mixin's jar sits on the actual JVM launch classpath (or
+     * gets pushed there itself via its own Premain-Class javaagent / injectSelfIntoAppClassLoader),
+     * so parent genuinely has those classes too - and, just as importantly, the LaunchClassLoader
+     * running the actual game NEVER defines them, so its own registered transformers (Mixin's own
+     * {@code MixinTransformer} among them, once {@code MixinBootstrap.init()} registers it) never
+     * run on them either. Neither premise holds here: this era's isolated universe has no javaagent
+     * and no launch-classpath overlap, so mixinbooter's jar is ONLY ever reachable through this
+     * loader's own addURL'd sources - the exact same shape as any other coremod jar this loader
+     * loads.
+     *
+     * <p><b>First attempted a plain no-op (session 4, wall 4)</b> - proven live: MixinBooter's
+     * coremod plugin failed to construct with {@code ClassNotFoundException:
+     * org.spongepowered.asm.util.asm.ASM}, because honoring the exclusion call routed it to a
+     * parent that has no such class, so {@code MixinBootstrap.init()} never ran and no mixin ever
+     * applied. A plain no-op fixed that (these packages now self-define through this loader like
+     * everything else) but broke something ELSE the exclusion call was ALSO protecting against
+     * (session 5, wall 5): with {@code org.spongepowered.asm.*} now flowing through this loader's
+     * OWN {@code findClass()}, Mixin's newly-registered {@code MixinTransformer} started running
+     * its own {@code couldTransformClass()} check against Mixin's OWN internal implementation
+     * classes - and that check itself calls {@code MixinEnvironment.getCompatibilityLevel()}, which
+     * (the first time, before its enum's static initializer has finished) needs to load
+     * {@code MixinEnvironment$CompatibilityLevel$1} - re-entering this SAME loader's
+     * {@code findClass()} -&gt; {@code runTransformers()} -&gt; {@code MixinTransformer} chain
+     * for the SAME class name that is already in the middle of being defined:
+     * {@code ClassCircularityError: org/spongepowered/asm/mixin/MixinEnvironment$CompatibilityLevel$1}
+     * (proven live, full recursive stack captured with
+     * {@code -Dlegacy.debugClassLoading=true}), silently swallowed and turned into a
+     * {@code ClassNotFoundException} by this loader's own {@code net.minecraftforge.}-prefix
+     * fallback the NEXT time something unrelated (Forge's own binary-patch library,
+     * {@code net.minecraftforge.fml.repackage.com.nothome.delta.ByteBufferSeekableSource}) got
+     * caught in the same transformer's blast radius and fell back to a parent that does not have
+     * IT either - {@code IncompatibleClassChangeError} against the copy of
+     * {@code SeekableSource} that stayed on this loader (MixinBooter wall 5).
+     *
+     * <p>The fix that actually closes both windows at once: keep every caller-supplied prefix OFF
+     * {@code classLoaderExceptions} (so this loader remains the sole definer, preserving identity -
+     * wall 3's whole point) but feed the SAME prefix into {@code addTransformerExclusion} (so this
+     * loader defines the class WITHOUT running any registered transformer - including Mixin's own -
+     * against it, which is what actually prevented the self-referential recursion in a real launch).
+     * Universal by construction: this override does not name MixinBooter, Mixin, or read anything
+     * but the one argument every caller already supplies - whatever prefix a coremod asks to keep
+     * off the transform pipeline gets kept off it, regardless of which coremod asked.
+     */
+    @Override
+    public void addClassLoaderExclusion(String toExclude) {
+        addTransformerExclusion(toExclude);
+    }
+
     public boolean isParentDelegated(String name) {
         for (int i = 0; i < alwaysParent.size(); i++) {
             if (name.startsWith(alwaysParent.get(i))) {

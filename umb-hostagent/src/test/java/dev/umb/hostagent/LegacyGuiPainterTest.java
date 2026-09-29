@@ -84,4 +84,59 @@ public final class LegacyGuiPainterTest {
                 LegacyGuiPainter.sampleKey(
                         quadMesh("hbm:gui/shape-key-mod", true, 0, 0, 10, 10, 0xFFFFFFFF)));
     }
+
+    // --- Line primitives (cockpit HUD white box: a GL_LINE_LOOP frame was painted as a fill) ---
+
+    @Test
+    public void lineSegmentsFollowGlPrimitiveRules() {
+        org.junit.jupiter.api.Assertions.assertArrayEquals(new int[] {0, 1, 2, 3},
+                LegacyGuiPainter.lineSegments(LegacyGuiPainter.GL_LINES, 5));
+        org.junit.jupiter.api.Assertions.assertArrayEquals(new int[] {0, 1, 1, 2},
+                LegacyGuiPainter.lineSegments(LegacyGuiPainter.GL_LINE_STRIP, 3));
+        org.junit.jupiter.api.Assertions.assertArrayEquals(new int[] {0, 1, 1, 2, 2, 3, 3, 0},
+                LegacyGuiPainter.lineSegments(LegacyGuiPainter.GL_LINE_LOOP, 4));
+        assertEquals(0, LegacyGuiPainter.lineSegments(LegacyGuiPainter.GL_LINE_LOOP, 1).length);
+        assertFalse(LegacyGuiPainter.isLineMode(GlEmulationSession.GL_QUADS));
+        assertFalse(LegacyGuiPainter.isLineMode(GlEmulationSession.GL_TRIANGLE_STRIP));
+    }
+
+    @Test
+    public void lineLoopFrameCoversOnlyItsOutline() {
+        // MCHeli DrawCameraRot: a 42x22 LINE_LOOP frame centred at (213.5, 180).
+        float[][] p = {{192.5f, 169f}, {234.5f, 169f}, {234.5f, 191f}, {192.5f, 191f}};
+        int[] seg = LegacyGuiPainter.lineSegments(LegacyGuiPainter.GL_LINE_LOOP, 4);
+        boolean[][] covered = new boolean[480][854];
+        int cells = 0;
+        for (int s = 0; s < seg.length; s += 2) {
+            float[] a = p[seg[s]], b = p[seg[s + 1]];
+            for (int[] r : LegacyGuiPainter.lineRects(a[0], a[1], b[0], b[1], 427, 240)) {
+                assertTrue(r[2] - r[0] == 1 || r[3] - r[1] == 1, "segments are one unit thick");
+                for (int y = r[1]; y < r[3]; y++) for (int x = r[0]; x < r[2]; x++) {
+                    if (!covered[y][x]) cells++;
+                    covered[y][x] = true;
+                }
+            }
+        }
+        assertFalse(covered[180][213], "interior of the frame stays see-through");
+        assertTrue(covered[169][213] && covered[191][213] && covered[180][192] && covered[180][234]);
+        assertEquals(2 * 43 + 2 * 21, cells, "exactly the perimeter");
+    }
+
+    @Test
+    public void slantedLineIsSteppedNotItsBoundingBox() {
+        java.util.List<int[]> rects = LegacyGuiPainter.lineRects(10f, 10f, 30f, 20f, 427, 240);
+        assertEquals(21, rects.size());
+        for (int[] r : rects) {
+            assertEquals(1, r[2] - r[0]);
+            assertEquals(1, r[3] - r[1]);
+        }
+    }
+
+    @Test
+    public void lineRectsAreClippedToThePanel() {
+        java.util.List<int[]> rects = LegacyGuiPainter.lineRects(-5f, 3f, 5f, 3f, 4, 10);
+        assertEquals(1, rects.size());
+        org.junit.jupiter.api.Assertions.assertArrayEquals(new int[] {0, 3, 4, 4}, rects.get(0));
+        assertTrue(LegacyGuiPainter.lineRects(50f, 50f, 60f, 50f, 40, 40).isEmpty());
+    }
 }

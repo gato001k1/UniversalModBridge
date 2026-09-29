@@ -39,35 +39,55 @@ final class LegacyHudPainter {
     }
 
     /**
-     * Paints a HUD overlay mesh through {@link LegacyGuiPainter}'s texture and blit
-     * logic instead of this class's old fill approximation. The old path fell back
-     * to a solid fill whenever a texture failed to resolve, and legacy HUD quads
-     * commonly carry a white tint ahead of the bind meant to color them, so an
-     * unresolved bind painted a solid white box. {@link #shouldPaint} stays as the
-     * guard against full-screen fills.
+     * Paints a HUD overlay mesh by delegating to {@link LegacyGuiPainter}'s texture-resolution,
+     * UV-clipping and tinted-blit logic (deploys #77-#79) instead of this class's own, older
+     * single-color-fill-or-whole-bbox-blit approximation. That older path is the concrete,
+     * mechanistic source of the "white while flying" report: any HUD quad whose texture failed
+     * to resolve here fell back to {@code gui.fill(...,draw.state.color)}, and legacy overlay
+     * quads commonly carry a neutral white tint (glColor4f(1,1,1,1)) ahead of the texture bind
+     * that was meant to color them - so an unresolved bind painted a solid white box, not a
+     * transparent/absent one. {@link #shouldPaint} (unchanged, still covers full-screen-fill and
+     * alpha-test rejection) remains the safety net against ever whiting out the whole viewport;
+     * {@link LegacyGuiPainter} is only asked to replay the individual bounded quads it allows
+     * through, now with the same real texture atlas + tint fidelity the GUI capture path has.
      *
-     * <p>No skip-if-unchanged cache here: the GUI layer redraws every frame, so
-     * skipping a static frame would make the HUD flicker. Per-texture decode and
-     * upload are already cached per texture id, so a steady frame only pays map
-     * lookups.</p>
+     * <p>No frame-to-frame "skip if unchanged" cache here: this is submitted once per rendered
+     * frame into an immediate-mode GUI layer that is fully redrawn every frame (nothing persists
+     * from a frame whose paint call was skipped) - skipping the actual blit/fill submission on a
+     * visually-static frame would make the HUD flicker/disappear on every such frame, a strict
+     * regression, not an optimization. The real per-frame cost - texture decode/GPU upload for
+     * each bound legacy asset - is already cached at the correct granularity (per texture id,
+     * not per frame) in {@link LegacyGuiTextureSupply#ensure}: a steady-state HUD frame only
+     * pays a cheap map lookup per bound texture, never a re-decode/re-upload.</p>
      */
     static void paint(GuiGraphicsExtractor gui, GlEmulationSession.Mesh mesh) {
         if (gui == null || mesh == null || mesh.draws.isEmpty()) return;
         logUnresolvedDrawsOnce(mesh);
         int drawn = LegacyGuiPainter.paint(gui, mesh, 0, 0, gui.guiWidth(), gui.guiHeight(), true);
-        if (drawn > 0) AgentLog.line("[HUD-BRIDGE] legacy overlay draws=" + drawn
-                + " vertices=" + mesh.vertexCount());
+        // Painted every frame; log only when the draw count changes (a per-frame line filled the
+        // capped host log within minutes and hid every later diagnostic).
+        if (drawn > 0 && drawn != lastLoggedDraws) {
+            lastLoggedDraws = drawn;
+            AgentLog.line("[HUD-BRIDGE] legacy overlay draws=" + drawn
+                    + " vertices=" + mesh.vertexCount());
+        }
     }
+
+    private static int lastLoggedDraws = -1;
 
     private static final int DIAG_MAX_DRAWS = 40;
     private static volatile boolean diagnosticLogged;
 
     /**
-     * One-shot (per JVM) log of the draws that will not become texture blits:
-     * bound texture string, resolved id, whether the texture supply can serve
-     * it, GL state, color, and bounds. Enough to tell apart "texture never
-     * bound", "bound but texturing never enabled" (legacy HUD code often
-     * assumes ambient texturing), and "bound but missing from the pack".
+     * separate from {@link LegacyGuiPainter}'s own one-shot mesh sample, which the GUI-capture
+     * path (R-menu etc.) typically consumes first in a live round, before the player ever mounts
+     * a vehicle, leaving the HUD path's own draws never logged. Logs every draw that will NOT
+     * resolve to a real texture blit (the ones that fall back to {@link #shouldPaint}'s
+     * bounded-color fill): its bound texture string, the {@link LegacyGuiTextureResolver}-resolved
+     * id, whether {@link LegacyGuiTextureSupply#ensure} can actually serve it, GL_TEXTURE_2D/
+     * GL_BLEND state, color, and bounds - everything needed to tell apart "texture never bound",
+     * code commonly assumes ambient texturing rather than enabling it itself), and "texture bound
+     * and enabled but genuinely missing from the generated resource pack".
      */
     private static void logUnresolvedDrawsOnce(GlEmulationSession.Mesh mesh) {
         if (diagnosticLogged) return;

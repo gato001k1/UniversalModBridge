@@ -36,8 +36,17 @@ import dev.umb.legacy.legacyside.UmbStub;
 import dev.umb.legacy.legacyside.UmbWorld;
 
 /**
- * Facade tests for STEP 3 - {@link UmbWorld}, {@link UmbPlayer}, {@link UmbInventoryPlayer} driven directly against a {@link FakeHostWorld}/{@link FakeHostPlayer} (no LegacyLoader, no FML boot).
- * These tests cover the wiring this class file compiles at all is...
+ * Facade tests for STEP 3 (DESIGN.md LANE A) - {@link UmbWorld}, {@link UmbPlayer},
+ * {@link UmbInventoryPlayer} driven directly against a {@link FakeHostWorld}/{@link FakeHostPlayer}
+ * (no LegacyLoader, no FML boot). Deliberately does NOT exercise real legacy Block/Item registry
+ * resolution (`GameData.getBlockRegistry()`/`getItemRegistry()`): a quick probe this session showed
+ * {@code net.minecraft.init.Blocks.field_150348_b} is null until FML's own bootstrap runs (vanilla
+ * blocks are not self-registering the way plain class-loading would suggest) - so anything routing
+ * through the real block/item registry is exercised instead by the full-boot scenario in step 6.
+ * These tests cover the wiring this class file compiles at all is a JVM-classfile-compatibility
+ * claim on its own: this test module compiles at {@code --release 21} yet calls directly into
+ * facade classes compiled at {@code --release 8} on the same classpath - proving a real FML boot is
+ * not required to unit-test a facade.
  */
 class UmbFacadeTest {
 
@@ -122,7 +131,6 @@ class UmbFacadeTest {
             System.out.println("[FakeHostWorld] " + msg);
         }
 
-        // record what UmbWorld forwards, overriding the contract's
         // default no-ops so the delegation itself is what gets asserted.
         final java.util.List<String> sounds = new java.util.ArrayList<String>();
         final java.util.List<String> particles = new java.util.ArrayList<String>();
@@ -171,7 +179,6 @@ class UmbFacadeTest {
             startUsingItemCalls++;
         }
 
-        // TICK/: recording fakes so tests can assert seed/write-back/hurt
         double motionX, motionY, motionZ;
         double[] lastSetMotion;
         String lastHurtType;
@@ -287,9 +294,7 @@ class UmbFacadeTest {
         assertTrue(world.field_73012_v != null);
         assertTrue(world.field_73011_w != null);
         assertTrue(world.field_72984_F != null);
-        // field_72998_d (collidingBoundingBoxes, fields.csv, PRIVATE on
         // 1.7.10 World - hence reflection) must be non-null or the inherited func_72945_a NPEs on
-        // its first statement (field_72998_d.clear(), )
         java.lang.reflect.Field colliding = World.class.getDeclaredField("field_72998_d");
         colliding.setAccessible(true);
         try {
@@ -393,7 +398,6 @@ class UmbFacadeTest {
         UmbWorld world = UmbWorld.create(host, 0);
 
         // func_72864_z/isBlockIndirectlyGettingPowered was upgraded from a stub to real by the
-        // (see UmbWorld's javadoc on that method) - this test now exercises
         // func_72976_f/getHeightValue instead, which stays a counted stub (no HostWorld
         // terrain-height primitive).
         int before = UmbStub.hitCount("UmbWorld", "func_72976_f(getHeightValue)");
@@ -404,7 +408,6 @@ class UmbFacadeTest {
 
         Map<String, String> coverage = UmbStub.coverageReport();
         assertTrue(coverage.containsKey("UmbWorld"), coverage.toString());
-        // five members upgraded from stub to real (playSoundAtEntity
         // playSoundEffect, spawnParticle, isBlockIndirectlyGettingPowered, newExplosion), so the
         // real-method count is now 31, not 25: createExplosion is also routed to the host.
         assertTrue(coverage.get("UmbWorld").contains("implemented=31"), coverage.get("UmbWorld"));
@@ -560,7 +563,6 @@ class UmbFacadeTest {
         UmbWorld serverWorld = UmbWorld.create(host, 0);
         LegacyClientFacade.Binding binding = LegacyClientFacade.install(null, serverWorld);
 
-// Legacy compatibility behavior.
         // client packet handlers such as MuzzleFlashPacket. Unsafe allocation bypasses the
         // constructor that normally assigns it.
         java.lang.reflect.Field mc = net.minecraft.client.multiplayer.WorldClient.class
@@ -667,7 +669,6 @@ class UmbFacadeTest {
 
     @Test
     void playerFacadeSeedsRotationFromHost() {
-        // without rotation seeding, EntityPlayer.func_70676_i (getLook)
         // always aimed along the zero-rotation vector, so every look-dependent legacy path
         // (MC Heli vehicle placement, thrown items, bows, buckets) silently missed.
         FakeHostWorld hostWorld = new FakeHostWorld();
@@ -699,6 +700,49 @@ class UmbFacadeTest {
     }
 
     @Test
+    void refreshPositionLeavesAMountedRidersPositionLegacyOwnedButStillAppliesLook() {
+        // X/Y/Z out of a riding player's own movement packet entirely (position comes from the
+        // vehicle's own updateRiderPosition every tick) but still applies that SAME packet's
+        // look (yaw/pitch) - a mounted rider keeps steering/aiming even though their reported
+        // position is ignored. refreshPosition must match: while field_70154_o (the legacy
+        // riding link) is set, the host's own x/y/z must never overwrite whatever the vehicle
+        // already placed the rider at, but yaw/pitch must still flow every refresh.
+        FakeHostWorld hostWorld = new FakeHostWorld();
+        UmbWorld world = UmbWorld.create(hostWorld, 0);
+        FakeHostPlayer hostPlayer = new FakeHostPlayer();
+        UmbPlayer player = UmbPlayer.create(world, hostPlayer);
+        // Stands in for a legacy vehicle/seat - refreshPosition only ever checks
+        // field_70154_o != null, no vehicle class or method is involved.
+        EntityBridgeTest.TestFixtureEntity vehicle = new EntityBridgeTest.TestFixtureEntity(world);
+
+        // The vehicle has already placed its rider (exactly what its own real
+        // updateRiderPosition/updatePosition would do, forced once per tick by
+        // EntityHandleImpl.riderOffset()).
+        player.func_70107_b(500.0, 70.0, -300.0);
+        player.field_70154_o = vehicle;
+
+        hostPlayer.x = 1.0;
+        hostPlayer.y = 2.0;
+        hostPlayer.z = 3.0;
+        hostPlayer.yaw = 77.0F;
+        hostPlayer.pitch = -12.0F;
+        player.refreshPosition();
+
+        assertEquals(500.0, player.field_70165_t, 0.0001, "a mounted rider's position must stay legacy-owned");
+        assertEquals(70.0, player.field_70163_u, 0.0001, "a mounted rider's position must stay legacy-owned");
+        assertEquals(-300.0, player.field_70161_v, 0.0001, "a mounted rider's position must stay legacy-owned");
+        assertEquals(77.0F, player.field_70177_z, 0.0001F, "look must still flow while mounted");
+        assertEquals(-12.0F, player.field_70125_A, 0.0001F, "look must still flow while mounted");
+
+        // Dismounting must restore normal host-owned position seeding.
+        player.field_70154_o = null;
+        player.refreshPosition();
+        assertEquals(1.0, player.field_70165_t, 0.0001, "dismounting must restore host-owned position");
+        assertEquals(2.0, player.field_70163_u, 0.0001);
+        assertEquals(3.0, player.field_70161_v, 0.0001);
+    }
+
+    @Test
     void entityTickRefreshesStablePlayerPoseAfterHostTeleport() {
         FakeHostWorld hostWorld = new FakeHostWorld();
         UmbWorld world = UmbWorld.create(hostWorld, 0);
@@ -723,7 +767,6 @@ class UmbFacadeTest {
 
     @Test
     void addStatIsAHarmlessNoOp() {
-        // the inherited EntityPlayerMP body dereferences theStatisticsFile
         // (field_147103_bO), which this facade never initializes - MC Heli's MCH_Achievement.addStat
         // NPE'd every vehicle spawn AFTER the entity was already created. Legacy stats stay local.
         FakeHostWorld hostWorld = new FakeHostWorld();
@@ -734,7 +777,6 @@ class UmbFacadeTest {
         player.func_71064_a(null, 1);
     }
 
-    // universal ctor replay guard
 
     @Test
     void allocateSeedsEveryCtorAssignedPlayerField() throws Exception {
@@ -774,9 +816,7 @@ class UmbFacadeTest {
         }
     }
 
-    /**
- * Fields the real ctors never assign : null matches a real instance
- */
+    /** Fields the real ctors never assign (verified by javap): null matches a real instance. */
     private static final java.util.Set<String> PLAYER_ALLOW =
             new java.util.HashSet<String>(java.util.Arrays.asList(
                     // Entity: mount/ridden state, set on mount, never in ctor.
@@ -824,9 +864,7 @@ class UmbFacadeTest {
         }
     }
 
-    /**
- * World fields no ctor assigns or no universe can provide
- */
+    /** World fields no ctor assigns or no universe can provide (verified by javap). */
     private static final java.util.Set<String> WORLD_ALLOW =
             new java.util.HashSet<String>(java.util.Arrays.asList(
                     // No ISaveHandler in-universe by design (chunk tickets via the
@@ -940,7 +978,6 @@ class UmbFacadeTest {
 
     @Test
     void getServerForPlayerNeedsNoOverride() {
-        // EntityPlayerMP.func_71121_q() is just "return (WorldServer) field_70170_p;"
         FakeHostWorld hostWorld = new FakeHostWorld();
         UmbWorld world = UmbWorld.create(hostWorld, 0);
         UmbPlayer player = UmbPlayer.create(world, new FakeHostPlayer());

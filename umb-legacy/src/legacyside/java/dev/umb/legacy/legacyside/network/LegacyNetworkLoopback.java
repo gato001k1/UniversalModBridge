@@ -24,6 +24,7 @@ import cpw.mods.fml.relauncher.Side;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 
+import dev.umb.legacy.legacyside.UmbPlayer;
 import dev.umb.legacy.legacyside.input.LegacyInputDiag;
 import net.minecraft.entity.player.EntityPlayerMP;
 import net.minecraft.network.NetHandlerPlayServer;
@@ -80,9 +81,10 @@ public final class LegacyNetworkLoopback {
     private static volatile Method UNSAFE_ALLOCATE_INSTANCE;
     private static volatile ServerContextProvider contextProvider;
     /**
- * Client handlers run inside the server-owned legacy tick, but their original Forge API has no player argument on sendToServer().
- * Keep that tick's facade here so the generic client-to-server route can construct the same SERVER MessageContext as the .
- */
+     * Client handlers run inside the server-owned legacy tick, but their original Forge API has
+     * no player argument on sendToServer().  Keep that tick's facade here so the generic
+     * ThreadLocal is intentional: a future multi-player host tick cannot cross-wire packets.
+     */
     private static final ThreadLocal<EntityPlayerMP> CURRENT_CLIENT_PLAYER =
             new ThreadLocal<EntityPlayerMP>();
     /** Scoped fallback for direct facade/render dispatches that do not bind the tick queue. */
@@ -255,6 +257,22 @@ public final class LegacyNetworkLoopback {
                                         + sender.field_70154_o.field_70170_p.field_72995_K));
             }
         }
+        // like MCHeli's onPacketIndReload reads/writes the sender's OWN inventory directly
+        // (EntityPlayer.field_71071_by.field_70462_a, no Container/Slot involved at all) - the
+        // per-tick pull in UmbPlayer.tickInventoryItems() already keeps that array reasonably
+        // fresh, but nothing pushed its OWN mutations (e.g. supplyAmmo decrementing an ammo
+        // stack's count) back to the host: UmbInventoryPlayer.pull()'s own change-gate means an
+        // unpushed mutation just sits in the facade forever, since the host's copy never changed
+        // to trigger a reconvert on the next pull. The result was a real ammo/fuel/generic-item
+        // consumption that only ever happened in the legacy simulation, never reaching the host
+        // player's real inventory. Bracketing every c2s dispatch here - not just MCHeli's - is
+        // universal: any legacy mod's packet handler that touches inventory gets the SAME pull
+        // before / push after this bridge already applies at every other interaction boundary
+        // (LegacyBridgeImpl's own numerous pullInventory/pushInventory pairs).
+        boolean syncInventory = sender instanceof UmbPlayer;
+        if (syncInventory) {
+            ((UmbPlayer) sender).pullInventory();
+        }
         try {
             handler.onMessage(message, context);
         } catch (RuntimeException | Error failure) {
@@ -267,6 +285,10 @@ public final class LegacyNetworkLoopback {
                         + message.getClass().getSimpleName() + ": " + failure + where);
             }
             throw failure;
+        } finally {
+            if (syncInventory) {
+                ((UmbPlayer) sender).pushInventory();
+            }
         }
         if (sender != null && sender.field_70154_o != null
                 && LegacyInputDiag.oncePer("loopback-vehicle:" + message.getClass().getName(), 3_000_000_000L)) {
@@ -381,8 +403,9 @@ public final class LegacyNetworkLoopback {
     private static void dropUnresolved(IMessage message, String reason) {
         if (message != null && LegacyInputDiag.oncePer("client-c2s-drop:"
                 + message.getClass().getName() + ":" + reason, 60_000_000_000L)) {
-            // Thread and binding state included so a future drop from an uncovered call
-            // path is diagnosable from one log line.
+            // thread/binding state included so a future drop (e.g. from a call path neither
+            // bindClientPlayer() nor bindFacadePlayer() covers yet) is diagnosable from one log
+            // line instead of needing another live round to add this - see vehicle-hud.md.
             LegacyInputDiag.log("client->server dropped unresolved=" + reason
                     + " message=" + message.getClass().getName()
                     + " thread=" + Thread.currentThread().getName()
@@ -854,9 +877,8 @@ public final class LegacyNetworkLoopback {
     }
 
     /**
- * Default context for the already-built UmbPlayer facade.
- * may replace this with a provider that obtains the current player from its .
- */
+     * suitable for handlers that do not inspect MessageContext.getServerHandler().
+     */
     private static MessageContext defaultContext(EntityPlayerMP player) {
         if (player == null) {
             return null;

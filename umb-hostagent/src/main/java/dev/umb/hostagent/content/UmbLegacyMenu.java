@@ -160,14 +160,29 @@ public final class UmbLegacyMenu extends AbstractContainerMenu {
         for (int i = 0; i < xs.length; i++) {
             addSlot(new MachineSlot(machineContainer, i, xs[i], ys[i], handle));
         }
-        if (playerIndices != null && playerXs != null && playerYs != null
-                && playerIndices.length == 36 && playerXs.length == 36 && playerYs.length == 36) {
-            for (int i = 0; i < 36; i++) {
-                addSlot(new Slot(playerInventory, playerIndices[i], playerXs[i], playerYs[i]));
+        // A legacy Container with ZERO machine slots is never a real inventory-backed GUI: it is
+        // the standard 1.7.10 idiom for a plain client-side GuiScreen (no GuiContainer, no synced
+        // slots at all - e.g. MCHeli's scoreboard/config screens, MCH_ContainerScoreboard/
+        // still needs SOME Container instance purely so FML's server/client GUI-open handshake has
+        // something to open. Every REAL container GUI in the corpus (HBM reactor, MCHeli's
+        // aircraft GUI, its UAV station) adds at least one real machine slot. Adding the host's own
+        // 36 player-inventory slots on top of a zero-slot container is therefore never correct: the
+        // legacy GUI never asked for them, has no panel layout that accounts for them, and the
+        // native slot grid (items, hover highlight, click) then floats over whatever the legacy
+        // mesh replay draws at those same screen coordinates (bug: hotbar items overlapping
+        // MCHeli's scoreboard buttons). Skipping them here is universal - it depends only on the
+        // machine-slot count, never a mod/class name - and leaves every real container GUI
+        // (machineSlotCount > 0) completely unaffected.
+        if (xs.length > 0) {
+            if (playerIndices != null && playerXs != null && playerYs != null
+                    && playerIndices.length == 36 && playerXs.length == 36 && playerYs.length == 36) {
+                for (int i = 0; i < 36; i++) {
+                    addSlot(new Slot(playerInventory, playerIndices[i], playerXs[i], playerYs[i]));
+                }
+            } else {
+                int playerInvY = Math.max(18, this.ySize - PLAYER_INV_Y_OFFSET);
+                addStandardInventorySlots(playerInventory, PLAYER_INV_X, playerInvY);
             }
-        } else {
-            int playerInvY = Math.max(18, this.ySize - PLAYER_INV_Y_OFFSET);
-            addStandardInventorySlots(playerInventory, PLAYER_INV_X, playerInvY);
         }
         addDataSlots(data);
         // Paint the very first frame's gauges without waiting for the first broadcastChanges() tick

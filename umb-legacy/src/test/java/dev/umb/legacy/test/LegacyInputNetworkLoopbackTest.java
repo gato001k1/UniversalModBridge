@@ -237,9 +237,7 @@ class LegacyInputNetworkLoopbackTest {
         assertEquals(1, calls.get());
     }
 
-    /**
- * MCHeli registers its handler for a base packet class and sends subclasses
- */
+    /** Live 2026-09-26: MCHeli registers its handler for a base packet class and sends subclasses. */
     @Test
     void serverHandlerRegisteredForBaseClassReceivesSubclassPackets() throws Exception {
         final AtomicInteger seen = new AtomicInteger();
@@ -261,6 +259,52 @@ class LegacyInputNetworkLoopbackTest {
         assertEquals(7, seen.get());
         LegacyNetworkLoopback.deliverToServer(new SubPacket(9), player);
         assertEquals(9, seen.get());
+    }
+
+    /**
+     * onPacketIndReload server handler reads/writes the sender's inventory via the RAW
+     * {@code EntityPlayer.field_71071_by.field_70462_a} array (no Container/Slot involved at
+     * all) - exactly what this test's handler does. Before this fix, {@code deliverToServer}
+     * never pulled/pushed the sender's inventory, so a mutation like this only ever touched the
+     * in-memory facade array and never reached the host - the very next
+     * {@code UmbInventoryPlayer.pull()} (its own change-gate sees no host-side change to react
+     * to) would keep the facade's "consumed" state, but the HOST's real inventory never lost the
+     * item. This proves both halves: the handler sees the host's CURRENT count (proving the new
+     * pull), and the host reflects the handler's mutation afterward (proving the new push).
+     */
+    @Test
+    void deliverToServerPullsBeforeAndPushesAfterForAUmbPlayerSender() throws Exception {
+        // A naked, never-registered Item instance sidesteps GameData.getItemRegistry() (not
+        // populated in this headless unit-test JVM - see UmbFacadeTest's own
+        // inventoryPullPushRoundTripsEmptySlots, which avoids real items for the same reason):
+        // UmbItemConv.toStackData still round-trips its count/damage through a null legacyId,
+        // which is exactly what this test needs to prove pull/push ran, independent of whether
+        // string item-id resolution itself succeeds in this environment.
+        net.minecraft.item.Item nakedItem = new net.minecraft.item.Item();
+        UmbFacadeTest.FakeHostWorld hostWorld = new UmbFacadeTest.FakeHostWorld();
+        dev.umb.legacy.legacyside.UmbWorld world = dev.umb.legacy.legacyside.UmbWorld.create(hostWorld, 0);
+        UmbFacadeTest.FakeHostPlayer hostPlayer = new UmbFacadeTest.FakeHostPlayer();
+        dev.umb.legacy.legacyside.UmbPlayer player =
+                dev.umb.legacy.legacyside.UmbPlayer.create(world, hostPlayer);
+        // Seed the LEGACY-side array directly (as MCHeli's real onUpdate would already have it,
+        // independent of pull/push) - this test is about deliverToServer's own bracketing, not
+        // UmbItemConv's string resolution.
+        player.field_71071_by.field_70462_a[0] = new net.minecraft.item.ItemStack(nakedItem, 5, 0);
+
+        LegacyNetworkLoopback.registerSimpleMessage(new IMessageHandler<TestMessage, IMessage>() {
+            @Override
+            public IMessage onMessage(TestMessage message, MessageContext context) {
+                // Exactly MCH_EntityAircraft.supplyAmmo's own pattern: read the raw array, mutate
+                // the ItemStack's own stackSize field directly - no Slot, no Container.
+                player.field_71071_by.field_70462_a[0].field_77994_a -= 2;
+                return null;
+            }
+        }, TestMessage.class, 26, Side.SERVER);
+
+        LegacyNetworkLoopback.deliverToServer(new TestMessage(1), player);
+
+        assertEquals(3, hostPlayer.inventory[0].count,
+                "the handler's mutation must reach the host afterward (proves the new push)");
     }
 
     /** Packets sent during the client dispatch are delivered after it ends (server world restored). */

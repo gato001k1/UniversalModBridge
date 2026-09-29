@@ -1033,7 +1033,30 @@ final class HostWorldImpl implements HostWorld, HostLevel {
         return null;
     }
 
-    private static net.minecraft.server.level.ServerPlayer findServerPassenger(
+    /**
+     * evidence): recursing PAST a nested {@code UmbLegacyEntity} here let an ANCESTOR twin (e.g.
+     * an MCHeli aircraft) steal a DESCENDANT twin's (a gunner seat's) own native rider as if it
+     * were the ancestor's own direct passenger. MCHeli's aircraft.field_70153_n (its own direct
+     * riddenByEntity) is null whenever only a seat is occupied - the seat has its OWN, completely
+     * separate field_70153_n - so {@code legacyPassengerIdentity()}'s "do I already have a
+     * non-player direct passenger" gate saw nothing and let this recursive walk find the real
+     * gunner PLAYER three hops down (gunner -> seat twin -> aircraft twin) and hand it to
+     * {@code prepareEntity}, which then called {@code setHostRider(gunner)} on the AIRCRAFT's own
+     * handle. That corrupted the aircraft's legacy {@code field_70153_n} with a fake rider it was
+     * never meant to have, which made {@code EntityHandleImpl.riderOffset()} run the AIRCRAFT's
+     * own {@code func_70043_V()}/{@code updateRiderPosition()} (hardcoded to seatsInfo[0], the
+     * PILOT's offset - real MCHeli code, faithful, just invoked on data that was never real) and
+     * {@code UmbLegacyEntity.syncLegacyRider} then re-mounted the real native gunner PLAYER
+     * directly onto the aircraft twin - exactly the live symptom (the gunner ends up at the
+     * pilot's spot, torn off the seat).
+     *
+     * <p>A nested legacy twin owns its own independent rider identity and runs its own
+     * prepareEntity/syncEntity cycle every tick; walking past it here to reach ITS passenger
+     * double-attributes that passenger to an ancestor that was never actually riding it. Every
+     * non-legacy-twin passenger (the "pure passthrough helper" case this recursion exists for)
+     * is still walked exactly as before - only the legacy-twin boundary is new.</p>
+     */
+    static net.minecraft.server.level.ServerPlayer findServerPassenger(
             Entity current, java.util.Set<Entity> seen, int depth) {
         if (current == null || depth >= 8 || !seen.add(current)) {
             return null;
@@ -1041,6 +1064,9 @@ final class HostWorldImpl implements HostWorld, HostLevel {
         for (Entity passenger : current.getPassengers()) {
             if (passenger instanceof net.minecraft.server.level.ServerPlayer player) {
                 return player;
+            }
+            if (passenger instanceof UmbLegacyEntity) {
+                continue;
             }
             net.minecraft.server.level.ServerPlayer nested = findServerPassenger(passenger, seen,
                     depth + 1);
@@ -1051,7 +1077,14 @@ final class HostWorldImpl implements HostWorld, HostLevel {
         return null;
     }
 
-    /** True for direct and nested seat/helper vehicle chains, with identity-cycle protection. */
+    /**
+     * True for direct and nested seat/helper vehicle chains, with identity-cycle protection - but
+     * (see {@link #findServerPassenger(Entity, java.util.Set, int)}'s javadoc for the live bug
+     * this closes) stops at the first {@code UmbLegacyEntity} boundary that is not {@code root}
+     * itself: a vehicle chain that passes THROUGH a different legacy twin (e.g. a player riding a
+     * gunner seat, checked against the aircraft's own root) belongs to that OTHER twin, not to
+     * {@code root}, even though {@code root} is a real ancestor in the native passenger graph.
+     */
     static boolean vehicleChainContains(Entity vehicle, Entity root) {
         Set<Entity> seen = java.util.Collections.newSetFromMap(
                 new java.util.IdentityHashMap<Entity, Boolean>());
@@ -1059,6 +1092,9 @@ final class HostWorldImpl implements HostWorld, HostLevel {
         while (vehicle != null && depth++ < 8 && seen.add(vehicle)) {
             if (vehicle == root) {
                 return true;
+            }
+            if (vehicle instanceof UmbLegacyEntity) {
+                return false;
             }
             vehicle = vehicle.getVehicle();
         }

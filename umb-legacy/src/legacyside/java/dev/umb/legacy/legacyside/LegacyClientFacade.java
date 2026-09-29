@@ -2025,6 +2025,18 @@ public final class LegacyClientFacade {
                             map.put((String) e.getKey(), (String) e.getValue());
                         }
                     }
+                    // The other direction too: StatCollector reads StringTranslate, which a real
+                    // client fills from the client jar's full en_US.lang. Ours came from the
+                    // server's reduced table, so client keys (container.inventory, ...) printed
+                    // raw in any GUI translating through StatCollector. Add only missing keys.
+                    if (fromFiles > 0) {
+                        @SuppressWarnings("unchecked") Map<String, String> server = (Map<String, String>) table;
+                        synchronized (instance.get(null)) {
+                            for (Map.Entry<String, String> e : map.entrySet()) {
+                                if (!server.containsKey(e.getKey())) server.put(e.getKey(), e.getValue());
+                            }
+                        }
+                    }
                 }
                 System.out.println("[UMB-LEGACY] client I18n locale keys=" + map.size()
                         + " fromLangFiles=" + fromFiles);

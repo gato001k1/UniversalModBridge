@@ -231,15 +231,44 @@ public final class AutomationControl {
         });
         if (cmd.equals("close_menu")) return onClient(() -> {
             Minecraft mc = Minecraft.getInstance();
-            if (mc == null || mc.gui == null || mc.gui.screen() == null) return new JsonPrimitive(false);
-            // (TitleScreen fallback only applies with no level loaded, which can't happen here).
-            mc.gui.setScreen(null);
+            Screen screen = mc == null || mc.gui == null ? null : mc.gui.screen();
+            if (screen == null) return new JsonPrimitive(false);
+            closeScreen(screen);
             return new JsonPrimitive(true);
         });
         MinecraftServer server = Minecraft.getInstance().getSingleplayerServer();
         if (server == null) throw new IllegalStateException("integrated server is not loaded");
         return onServer(server, () -> dispatchServer(server, r));
     }
+
+    /**
+     * Closes whichever screen is currently showing exactly the way a real ESC press does it -
+     * calls {@code onClose()}, never {@code Gui.setScreen(null)} directly. The base
+     * {@code Screen.onClose()} body IS just {@code Gui.setScreen(null)} (so plain screens -
+     * title/options/world-creation - behave exactly as before), but
+     * {@code AbstractContainerScreen.onClose()} OVERRIDES it to first call
+     * {@code minecraft.player.closeContainer()} - which sends the
+     * {@code ServerboundContainerClosePacket} the server needs to run
+     * {@code Player.doCloseContainer()} ({@code menu.removed()} then {@code containerMenu =
+     * inventoryMenu}) - and only then chains to that same {@code Gui.setScreen(null)}.
+     *
+     * <p>The previous body of {@code close_menu} called {@code Gui.setScreen(null)} directly,
+     * skipping that packet for every legacy container screen: the server's {@code containerMenu}
+     * stayed on the old {@code UmbLegacyMenu} forever (only the client-visible screen was
+     * cleared), so the NEXT key/packet-triggered {@code openGui} (e.g. MCHeli's R) saw "a legacy
+     * menu is already open" and {@code HostPlayerImpl.openLegacyContainer}'s reopen guard silently
+     * no-opped it - no host menu, no {@code [UMB-GUI]} log line, reproducible forever after the
+     * first close. Block-activated GUIs never hit this because {@code UmbLegacyBlock} calls
+     * already self-heals a stale {@code containerMenu} by closing it before opening the new one.
+     *
+     * <p>Package-visible and taking a plain {@link Screen} (not {@code Minecraft.getInstance()})
+     * so it is directly unit-testable without a live client - see
+     * {@code AutomationControlCloseMenuTest}.
+     */
+    static void closeScreen(Screen screen) {
+        screen.onClose();
+    }
+
     private static <T> T onServer(MinecraftServer s, Callable<T> c) throws Exception { if (Thread.currentThread()==s.getRunningThread()) return c.call(); CompletableFuture<T> f=new CompletableFuture<>(); s.execute(() -> { try { f.complete(c.call()); } catch(Throwable e){f.completeExceptionally(e);} }); return f.get(30,TimeUnit.SECONDS); }
     private static <T> T onClient(Callable<T> c) throws Exception { Minecraft m=Minecraft.getInstance(); if(Thread.currentThread()==m.getRunningThread()) return c.call(); CompletableFuture<T> f=new CompletableFuture<>(); m.execute(() -> {try{f.complete(c.call());}catch(Throwable e){f.completeExceptionally(e);}}); return f.get(30,TimeUnit.SECONDS); }
     /**

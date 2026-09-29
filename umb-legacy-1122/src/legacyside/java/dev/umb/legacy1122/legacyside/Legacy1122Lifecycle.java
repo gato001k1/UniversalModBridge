@@ -68,6 +68,18 @@ final class Legacy1122Lifecycle {
             // transformers before any of their own jar's classes verify - see
             // Legacy1122CoremodLoader's own javadoc for why this was missing and what real FML does
             // here. Must run before FMLInjectionData/loadMods touch any mod class below.
+            // A coremod's own constructor can call LaunchClassLoader.addClassLoaderExclusion on
+            // itself while discoverAndRegister below runs it (proven live: MixinBooter's
+            // MixinBooterPlugin.initialize() -> installClassLoaderExclusionsAndTransformers adds
+            // org.spongepowered.asm.* / org.objectweb.asm. / zone.rong.mixinbooter.service. to
+            // exactly that set, assuming - as it would in a real Forge launch with a javaagent or
+            // launch-classpath overlap - that "parent" also has those classes; here it does not, so
+            // every one of those loads a coremod like this needs turns into a ClassNotFoundException
+            // and its own bootstrap, MixinBootstrap.init() in MixinBooter's case, never runs; see
+            // Legacy1122Loader.addClassLoaderExclusion's own javadoc for why that override - not a
+            // reset called from here after the fact - is what actually closes the window: the
+            // exclusion call and the broken class load it causes both happen inside the SAME
+            // coremod constructor invocation below, before this method ever gets control back).
             List<String> coremods = Legacy1122CoremodLoader.discoverAndRegister(loader, modJars, log);
             if (!coremods.isEmpty()) {
                 log.accept("UMB-BRIDGE-1122 coremods discovered: " + coremods);
@@ -210,6 +222,35 @@ final class Legacy1122Lifecycle {
         Method transformer = launchLoaderType.getMethod("registerTransformer", String.class);
         exclude.invoke(loader, "net.minecraftforge.fml.common.asm.transformers.");
         exclude.invoke(loader, "net.minecraftforge.fml.common.patcher.");
+        // net.minecraftforge.fml.common.eventhandler.SubscribeEvent (an ANNOTATION with a default
+        // value - "EventPriority priority() default NORMAL") must never pass through
+        // EventSubscriptionTransformer/EventSubscriberTransformer: those two run a full ASM
+        // ClassNode parse over EVERY non-"net.minecraft."-prefixed class as it loads (verified:
+        // it only skips null bytes, the literal class "...eventhandler.Event", and
+        // "net.minecraft." names; SubscribeEvent matches none of those). The first time that
+        // parse reaches SubscribeEvent's own AnnotationDefault attribute, ASM's
+        // MethodNode.visitAnnotationDefault() constructs a MethodNode$1 and throws
+        // "IllegalAccessError: failed to access class org.objectweb.asm.tree.MethodNode$1 from
+        // class org.objectweb.asm.tree.MethodNode" (MixinBooter wall 3, proven live) - the exact
+        // same category of bug already fixed below for Gson (an annotation-default value
+        // re-entrantly splitting an ASM inner class across two loaders mid-transform: this
+        // lifecycle's own asm-debug-all-5.2 - pinned to match the forge universal jar's own
+        // Class-Path, see build.ps1 - versus run-tests.ps1's newer asm-9.9 ahead of it on the
+        // JUnit launcher's classpath for the transformer-verifier test), just tripped by Forge's
+        // own annotation type instead of a mod's JSON metadata. Once ASMEventHandler (which DOES
+        // still get transformed normally) reads that broken class back via reflection, its own
+        // SubscribeEvent.priority() call sees a DIFFERENT loader's copy of the annotation and the
+        // JVM's loader-constraint check rejects it - the LinkageError this fix resolves.
+        // Deliberately narrow (the exact class, not the whole eventhandler package): the package
+        // also holds GenericEvent, EventBus, and friends that DO need
+        // Deobfuscation/AccessTransformer/PatchingTransformer applied normally (proven live: a
+        // package-wide exclusion here made GenericEvent's constructor disappear - "NoSuchMethodError
+        // net.minecraftforge.fml.common.eventhandler.GenericEvent: method '<init>()' not found" -
+        // because it also skipped the transformers those classes genuinely need, not just the two
+        // that crash on annotation defaults). Any other 1.12.2 mod (or Forge class) that defines
+        // its OWN annotation with a default value hits this identical wall the first time it loads
+        // through this pipeline; this entry only covers the one proven by MixinBooter today.
+        exclude.invoke(loader, "net.minecraftforge.fml.common.eventhandler.SubscribeEvent");
         // Real Forge/LaunchWrapper excludes its own bundled third-party libraries (Gson among
         // them) from the mod transformer pipeline for exactly the reason this fix exists: Gson is
         // itself used DURING mod loading (a coremod's own JSON-based metadata scan, e.g.), so

@@ -22,7 +22,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *
  * The MenuType and Inventory arguments are allocated via {@link TestSupport#allocate} rather than
  * constructed normally: AbstractContainerMenu's ctor only ever STORES the MenuType reference
- * (verified via javap -c -- `putfield menuType`, never dereferenced), and Slot's ctor only stores
  * its Container reference, so a real MenuType (needs the private-ctor+widened-interface dance,
  * see UmbMenuRegistration) or a real player Inventory (needs a live Player/Level) is not required
  * to exercise this class's own slot-mirroring logic headlessly.
@@ -64,7 +63,6 @@ class UmbLegacyMenuTest {
         // here: 26.2's item default-component binding (Holder$Reference.bindComponents) is a
         // separate pass this headless suite's plain Bootstrap.bootStrap() call does not reach for
         // vanilla items outside gameplay, and reproducing that pass is out of scope for this
-        // lane (see g2-laneB-progress.md). The mapping itself is covered directly below.
         Registrar.LEGACY_ITEMS.put("hbm:test_item", Items.STICK);
         Registrar.LEGACY_VARIANT_ITEMS.put("hbm:test_item@0", Items.STICK);
         assertEquals(Items.STICK, Registrar.LEGACY_VARIANT_ITEMS.get("hbm:test_item@0"),
@@ -73,8 +71,6 @@ class UmbLegacyMenuTest {
 
     @Test
     void mirrorsTheRealHbmBrickFurnaceSlotLayout() {
-        // The exact legacy machine-slot coordinates lead-verified in a live 26.2 windowed run of
-        // HBM's real ContainerFurnaceBrick (research/out/legacy/win-m2/shots/09-GUI.png), a
         // standard 176x166 1.7.10 GUI. Order matters: this is the order UmbMenuProvider reads
         // ContainerHandle.slots() in and addSlot()s them, so it is also the order client-side
         // clicks/quickMoveStack index into.
@@ -96,7 +92,6 @@ class UmbLegacyMenuTest {
 
         // The standard vanilla anchor for a chest-style 176x166 panel: main inventory at (8,84)
         // (3 rows of 9, 18px apart -- rows at y=84,102,120) then the hotbar at (8,142)
-        // (addStandardInventorySlots's own +58 offset, javap-verified), matching every vanilla
         // container screen's own layout for a 166-tall panel.
         Slot firstMain = menu.slots.get(4);
         Slot firstHotbar = menu.slots.get(4 + 27);
@@ -215,5 +210,45 @@ class UmbLegacyMenuTest {
         assertEquals(2, menu.dataCount());
         assertEquals(10, menu.slots.get(0).x);
         assertEquals(40, menu.slots.get(1).y);
+    }
+
+    /**
+     * Bug: a plain 1.7.10 GuiScreen (no GuiContainer, no synced slots at all - the exact shape of
+     * verified ZERO addSlotToContainer calls in either constructor) still has to hand FML SOME
+     * Container instance to open the GUI at all. That Container's slot list ({@code
+     * container.field_75151_b}) is empty, so {@link FakeLegacyBridge.FakeContainerHandle#slotCount()}
+     * is 0 here - the same shape a real such handle has. Before this fix the host unconditionally
+     * added its own 36 native player-inventory slots on top (see UmbLegacyMenuTest's other tests,
+     * which mirror a REAL container's 2+36), and those slots render items/hover/click at fixed
+     * screen coordinates the legacy panel layout never accounted for - live: hotbar items drawn
+     * over MCHeli's "Jump spawn pos" button. Universal: gated purely on machine-slot count, not any
+     * mod/class name; a real container GUI (HBM reactor, MCHeli's aircraft GUI, its UAV station)
+     * always has at least one real machine slot and is completely unaffected (every other test in
+     * this class exercises that path).
+     */
+    @Test
+    void zeroMachineSlotsMeansNoNativePlayerInventorySlotsEither() {
+        FakeLegacyBridge.FakeContainerHandle handle =
+                new FakeLegacyBridge.FakeContainerHandle("Scoreboard", new int[0], new int[0]);
+
+        UmbLegacyMenu menu = UmbLegacyMenu.forServer(rawMenuType(), 20, rawInventory(), handle,
+                Component.literal("Scoreboard"));
+
+        assertEquals(0, menu.machineSlotCount);
+        assertEquals(0, menu.slots.size(),
+                "a zero-slot legacy container must produce a zero-slot host menu - no player "
+                        + "inventory slots grafted on for a GUI that never asked for any");
+    }
+
+    /** Same contract on the client-side mirror the host actually screens: the transmitted layout's
+     *  xs/ys come from the same zero-length {@code ContainerHandle.slots()} call server-side, so
+     *  both sides must agree (a client/server slot-count mismatch is its own, worse bug). */
+    @Test
+    void clientMirrorOfAZeroSlotContainerAlsoHasNoPlayerInventorySlots() {
+        UmbLegacyMenu menu = UmbLegacyMenu.forClient(rawMenuType(), 21, rawInventory(),
+                new int[0], new int[0], 0, Component.literal("Scoreboard"));
+
+        assertEquals(0, menu.machineSlotCount);
+        assertEquals(0, menu.slots.size());
     }
 }

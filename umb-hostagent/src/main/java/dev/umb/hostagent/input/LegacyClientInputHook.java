@@ -46,6 +46,7 @@ public final class LegacyClientInputHook {
             java.util.Map<String, Boolean> raw = new java.util.LinkedHashMap<>();
             if (mc == null || mc.gui == null || mc.gui.screen() != null || !mc.isWindowActive()) return raw;
             com.mojang.blaze3d.platform.Window window = mc.getWindow();
+            ensureStickyKeys(window);
             // Focus marker (not a key code): legacy inGameHasFocus / Display.isActive.
             raw.put("raw:focus", Boolean.TRUE);
             for (int[] pair : RAW_KEYS) {
@@ -62,6 +63,29 @@ public final class LegacyClientInputHook {
             }
             return raw;
         };
+    }
+
+    private static volatile long stickyWindow;
+
+    /**
+     * The raw sampler polls key LEVELS once per client tick (50 ms), so a tap shorter than a tick
+     * (a quick R for a mod GUI, a 40 ms synthetic key press) was never seen by the legacy side.
+     * GLFW sticky keys keep a released key reading PRESS until it is polled once. This sampler
+     * polls every key each tick, so the latch lasts at most one tick and no tap is lost. Runs on
+     * the client thread (GLFW input-mode calls must); re-applied if the window is recreated.
+     */
+    static void ensureStickyKeys(com.mojang.blaze3d.platform.Window window) {
+        try {
+            long handle = window == null ? 0L : window.handle();
+            if (handle == 0L || handle == stickyWindow) return;
+            org.lwjgl.glfw.GLFW.glfwSetInputMode(handle, org.lwjgl.glfw.GLFW.GLFW_STICKY_KEYS,
+                    org.lwjgl.glfw.GLFW.GLFW_TRUE);
+            stickyWindow = handle;
+            LegacyInputDiag.line("raw key sampler: GLFW sticky keys on (short taps latch one tick)");
+        } catch (Throwable t) {
+            AgentLog.error("LegacyClientInputHook.ensureStickyKeys", t, 1);
+            stickyWindow = window == null ? 0L : window.handle();
+        }
     }
 
     public static KeyMapping registerLegacyKey(String namespace, String stableId,

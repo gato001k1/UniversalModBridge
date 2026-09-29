@@ -17,8 +17,18 @@ import net.minecraft.world.WorldServer;
 import dev.umb.bridge.api.HostPlayer;
 
 /**
- * The EntityPlayer facade .
- * Subclasses {@code EntityPlayerMP} (concrete, and it IS the {@code ICrafting} the legacy {@code Container} pushes progress bars into - twin-first-mvp.md section 1b), allocated with {@code Unsafe.allocateInstance}: {@code...
+ * The EntityPlayer facade (DESIGN.md LANE A step 3 / facade-fidelity.md section 3 /
+ * twin-first-mvp.md section 5). Subclasses {@code EntityPlayerMP} (concrete, and it IS the
+ * {@code ICrafting} the legacy {@code Container} pushes progress bars into - twin-first-mvp.md
+ * section 1b), allocated with {@code Unsafe.allocateInstance}: {@code EntityPlayerMP}'s only
+ * constructor needs a real {@code MinecraftServer}/{@code WorldServer}/{@code GameProfile}/
+ * {@code ItemInWorldManager}, none of which exist in the legacy universe.
+ *
+ * {@code return (WorldServer) this.field_70170_p;}, so seeding {@code field_70170_p} with the
+ * {@link UmbWorld} makes it work for free. {@code func_70088_a()} (entityInit, populates the
+ * DataWatcher) is likewise never called - nothing here runs {@code Entity}'s constructor, and
+ * overriding {@code func_70093_af()} directly (isSneaking) bypasses the DataWatcher read the
+ * {@code field_70180_af.func_75683_a(0)}, which would NPE if entityInit never ran).</p>
  */
 public final class UmbPlayer extends EntityPlayerMP {
 
@@ -27,8 +37,6 @@ public final class UmbPlayer extends EntityPlayerMP {
     static {
         // real: func_70093_af, func_70005_c_, func_146105_b, func_145747_a, func_70694_bm,
         // func_71029_a, func_71110_a, func_71111_a, func_71112_a,
-        // func_70097_a
-        // func_71064_a = 11
         // stubbed: func_70670_a(addPotionEffect), func_71019_a(dropOneItem) = 2.
         UmbStub.declare(FACADE, 11, 2);
     }
@@ -62,7 +70,6 @@ public final class UmbPlayer extends EntityPlayerMP {
         p.bindHost(host);
         p.syncData = new int[32];
         // Replays, in constructor order, everything the skipped chain assigns — each
-// Legacy compatibility behavior.
         // (Entity(World), EntityLivingBase(World), EntityPlayer(World,GameProfile),
         // EntityPlayerMP(server,world,profile,iwm)). Virtual calls (entityInit chain,
         // applyAttributes, setHealth, getDefaultEyeHeight, setPosition) resolve to the
@@ -287,8 +294,11 @@ public final class UmbPlayer extends EntityPlayerMP {
     }
 
     /**
- * Replays the Forge part of {@code Entity(World)} that Unsafe.allocateInstance skipped : {@code extendedProperties = new HashMap}, post {@code EntityEvent.EntityConstructing} (where every mod registers its IExtendedEntityProperties), then {@code init(entity,...
- */
+     * Replays the Forge part of {@code Entity(World)} that Unsafe.allocateInstance skipped
+     * post {@code EntityEvent.EntityConstructing} (where every mod registers its
+     * IExtendedEntityProperties), then {@code init(entity, world)} each registered property;
+     * plus {@code capturedDrops}. Without this every mod that keeps per-player data NPE'd on
+     */
     private static void seedForgeEntityState(UmbPlayer p, net.minecraft.world.World world) {
         if (p.extendedProperties == null) p.extendedProperties = new java.util.HashMap<>();
         if (p.capturedDrops == null) p.capturedDrops = new java.util.ArrayList<>();
@@ -466,37 +476,60 @@ public final class UmbPlayer extends EntityPlayerMP {
         return ticked;
     }
 
-    /**
- * Copies the host's live pose into the inherited fields - call before each bridge entry.
- * Position AND rotation: until the , only posX/Y/Z crossed, so {@code EntityPlayer.func_70676_i} (getLook, methods.csv) always aimed along a fixed zero-rotation vector and...
- */
+    /** Copies the host's live pose into the inherited fields - call before each bridge entry.
+     *  {@code EntityPlayer.func_70676_i} (getLook, methods.csv) always aimed along a fixed
+     *  zero-rotation vector and every look-dependent path (MC Heli vehicle placement raytrace,
+     *  thrown items, bows, buckets) silently missed - the user's "nothing happens" with zero
+     *  logs. prev==current throughout: a facade is freshly bound per dispatch, so there is no
+     *  older tick to interpolate from (same reasoning as {@link #pullMotion}'s change detect). */
     public void refreshPosition() {
         // Position refreshes happen from World entity queries during aircraft onUpdate.  They
         // must never turn a cached facade refresh into a graph refresh: preserve both vanilla
         // riding links before and after copying the host pose.
         net.minecraft.entity.Entity vehicle = field_70154_o;
         net.minecraft.entity.Entity passenger = field_70153_n;
-        field_70165_t = host.getX();
-        field_70163_u = host.getY();
-        field_70161_v = host.getZ();
-        field_70169_q = field_70165_t;
-        field_70167_r = field_70163_u;
-        field_70166_s = field_70161_v;
+        // (NetHandlerPlayServer's movement-packet handler) drops the X/Y/Z out of a riding
+        // player's own movement packet entirely - a mounted entity's position comes from
+        // Entity.updateRidden calling ridingEntity.updateRiderPosition() every tick, never from
+        // the rider's own reported position - but the SAME packet's look (yaw/pitch) is still
+        // applied every tick, exactly how a real rider keeps aiming a turret or steering while
+        // mounted. A mounted UmbPlayer facade is never ticked through World.updateEntity (see
+        // EntityHandleImpl.riderOffset's own comment on this), so nothing else keeps its legacy
+        // position live - the vehicle/seat's own updateRiderPosition (forced once per tick by
+        // riderOffset()) is what owns it instead. Copying the host's OWN reported x/y/z here on
+        // EVERY refresh - which can run several times per tick, from World entity queries during
+        // another vehicle's onUpdate - fights that legacy-authoritative placement with host state
+        // that may still be a tick behind it, producing exactly the "jitter / wrong seat position
+        // for weapon+camera math / rotation fights the vehicle" symptom this closes. Look must
+        // still flow either way: it is the rider's own live input, not something the vehicle
+        // owns, and MCHeli's own lastRiderYaw tracking (seats-live.md SS I) depends on it.
+        boolean mounted = vehicle != null;
+        if (!mounted) {
+            field_70165_t = host.getX();
+            field_70163_u = host.getY();
+            field_70161_v = host.getZ();
+            field_70169_q = field_70165_t;
+            field_70167_r = field_70163_u;
+            field_70166_s = field_70161_v;
+            // legacy contact/AABB code reading entity.boundingBox NPE'd. Standard 1.7.10 player
+            // size (0.6 wide, 1.8 tall), anchored at the feet like EntityPlayer.setPosition does.
+            // field_70121_D is FINAL on 1.7.10 Entity (javac: "cannot assign a value to final
+            // variable") - mutate it in place via func_72324_b (setBounds, methods.csv) instead.
+            // Skipped while mounted: the vehicle's own func_70107_b (setPosition) call already
+            // recomputes this from the legacy-owned position - copying host state here too would
+            // just race it with a stale box.
+            field_70121_D.func_72324_b(
+                    field_70165_t - 0.3D, field_70163_u, field_70161_v - 0.3D,
+                    field_70165_t + 0.3D, field_70163_u + 1.8D, field_70161_v + 0.3D);
+        }
         // fields.csv: field_70177_z=rotationYaw, field_70125_A=rotationPitch,
         // field_70126_B=prevRotationYaw, field_70127_C=prevRotationPitch. HostPlayer.getYaw/
         // getPitch carry identical degrees semantics (see their javadoc) - identity mapping.
+        // Always applied, mounted or not - see this method's own javadoc above.
         field_70177_z = host.getYaw();
         field_70125_A = host.getPitch();
         field_70126_B = field_70177_z;
         field_70127_C = field_70125_A;
-        // TICK/: field_70121_D (boundingBox, fields.csv) was never seeded, so any
-        // legacy contact/AABB code reading entity.boundingBox NPE'd. Standard 1.7.10 player size
-        // (0.6 wide, 1.8 tall), anchored at the feet like EntityPlayer.setPosition does.
-        // field_70121_D is FINAL on 1.7.10 Entity (javac: "cannot assign a value to final
-        // variable") - mutate it in place via func_72324_b (setBounds, methods.csv) instead.
-        field_70121_D.func_72324_b(
-                field_70165_t - 0.3D, field_70163_u, field_70161_v - 0.3D,
-                field_70165_t + 0.3D, field_70163_u + 1.8D, field_70161_v + 0.3D);
         if (vehicle != null && vehicle.field_70153_n != this) {
             vehicle.field_70153_n = this;
         }
@@ -549,13 +582,17 @@ public final class UmbPlayer extends EntityPlayerMP {
         return host.isSneaking();
     }
 
-/** Legacy compatibility behavior. */
+    /**
+     * Grounded Entity.func_70078_a (mountEntity). MC-style seat interactions call this method
+     * repeatedly, including with null when a vehicle rejects or replaces a passenger. Keep the
+     * legacy behavior, but expose the caller and the old/new vehicle identities at a bounded rate
+     * so a host rider mirror cannot silently erase an interaction-created seat mount.
+     */
     @Override
     public void func_70078_a(net.minecraft.entity.Entity vehicle) {
         long now = System.nanoTime();
         net.minecraft.entity.Entity beforeVehicle = field_70154_o;
         net.minecraft.entity.Entity beforePassenger = vehicle == null ? null : vehicle.field_70153_n;
-// Legacy compatibility behavior.
         // it calls EntityPlayer.func_70078_a and then unconditionally sends S1B through
         // field_71135_a. The loopback NetHandlerPlayServer is link-safe, but the direct
         // Entity.func_70078_a operation avoids a native-network side effect on this path.
@@ -684,9 +721,14 @@ public final class UmbPlayer extends EntityPlayerMP {
     }
 
     /**
- * func_70097_a - attackEntityFrom (methods.csv), TICK/: real via {@code HostPlayer.hurt}.
- * The inherited EntityPlayerMP body is unusable here anyway (it reads combat-tracker/capability fields Unsafe.allocateInstance never initialized).
- */
+     * {@code HostPlayer.hurt}. The inherited EntityPlayerMP body is unusable here anyway (it reads
+     * combat-tracker/capability fields Unsafe.allocateInstance never initialized). The damage type
+     * crosses the boundary as 1.7.10's own damageType string (field_76373_n, fields.csv); the host
+     * maps known vanilla names to native damage sources and falls back to generic damage for
+     * mod-custom ones. Returns true ("the attack landed") - the host cannot report back whether
+     * its own rules (creative mode, invulnerability frames) absorbed it, and 1.7.10 callers only
+     * use the return for cosmetic follow-ups.
+     */
     @Override
     public boolean func_70097_a(DamageSource source, float amount) {
         host.hurt(source == null ? null : source.field_76373_n, amount);
@@ -700,7 +742,7 @@ public final class UmbPlayer extends EntityPlayerMP {
 
     @Override
     public EntityItem func_71019_a(ItemStack stack, boolean flag) {
-// Legacy compatibility behavior.
+        // dev.umb.bridge.api.HostPlayer has no "drop item" primitive (M1 scope: nothing on the
         // furnace path drops items into the world) - counted stub, not a silent no-op.
         UmbStub.hit("UmbPlayer", "func_71019_a(dropOneItem)");
         return null;

@@ -202,6 +202,8 @@ public final class LegacyClientTickDispatcher {
                 }
             }
             try {
+                // This tick's level polls have seen every press latched since the last tick.
+                LegacyLwjglState.clientTickDone(playerName);
                 LegacyLwjglState.end();
             } finally {
                 try {
@@ -225,20 +227,31 @@ public final class LegacyClientTickDispatcher {
      *
      * <p>Also posts {@code TickEvent.RenderTickEvent} START/END here (in addition to the
      * existing {@code RenderGameOverlayEvent} stream): a HUD is not always attached to a Forge
-     * overlay element. Mod client tick handlers commonly draw their HUD from a
-     * {@code RenderTickEvent}, END phase subscription instead. {@link #tick} already posts
-     * this event every host server tick, but outside any capture session, so GL calls made
-     * there are discarded and the mesh misses that HUD's geometry. Posting it again here,
-     * inside the capture scope with the real partial tick, is what captures it; {@link #tick}
-     * posts it only while this path is idle, so it fires once per frame either way. Ordering
-     * matches real Minecraft: START precedes every overlay element, END follows all of them,
-     * so an END-drawn HUD still paints on top.</p>
+     * overlay element. A mod's own client tick handler commonly draws its HUD directly from a
+     * MCHeli jar: {@code mcheli.wrapper.W_TickHandler.onRenderTickEvent} dispatches
+     * {@code phase==END} to {@code onRenderTickPost(float)}, which draws the vehicle HUD). {@link
+     * #tick} already posts this event every host server tick, but that call runs outside any
+     * {@link LegacyRenderCapture} session, so every GL-EMU call the handler makes there is
+     * silently discarded ({@code LegacyRenderCapture.ACTIVE} is null): the mesh returned to the
+     * host was always missing that HUD's geometry, independent of any painter fix. Posting it a
+     * second time here, inside the capture scope, with the real partial tick, is what actually
+     * captures it; {@link #tick} posts it only while this path is idle, so the event fires
+     * once per frame either way. Ordering matches real Minecraft: RenderTickEvent(START) precedes every overlay
+     * element, RenderTickEvent(END) follows all of them, so a HUD drawn from END still paints on
+     * top - exactly like today's live game.</p>
      *
-     * <p>Every capture below passes {@code guiAmbientState=true}: the 2D overlay phase in
-     * real Minecraft begins with texturing (and usually blending) already enabled, and
-     * legacy HUD and font code commonly assumes that ambient state instead of enabling it
-     * per quad. Without it, textured quads replay as white boxes and glyphs as color blocks.
-     * The container-GUI path already passes the same flag.</p>
+     * {@code MCH_HudItemTexture.drawTexture} nor {@code MCH_HudItem}'s own body ever calls
+     * {@code GL11.glEnable(GL_TEXTURE_2D)} - it only binds the texture (build's
+     * {@code getfield}/{@code bindTexture} evidence) and draws Tessellator quads, exactly the
+     * class of mod code {@link LegacyRenderCapture#captureOverlay(LegacyClientFacade.Binding,
+     * SRG {@code FontRenderer} (the facade's real font, not a stub) shows the same thing: its
+     * glyph-quad loop (SRG {@code func_78255_a}) only ever {@code glDisable}/{@code glEnable}s
+     * {@code GL_TEXTURE_2D} around the underline/strikethrough decoration box, never at the top
+     * of the method - glyph quads also assume ambient texturing. {@link LegacyGuiCapture} (the
+     * GuiContainer/R-menu path, already proven correct live) already passes {@code true} here;
+     * this is the same real vanilla "the 2D overlay phase begins with texturing (and usually
+     * blending) already enabled" fact applying equally to the HUD render phase, not a
+     * HUD-specific guess.</p>
      */
     public static GlEmulationSession.Mesh renderOverlay(EntityPlayer serverPlayer, World serverWorld,
                                                          final float partialTicks, final int width,
@@ -312,10 +325,10 @@ public final class LegacyClientTickDispatcher {
                                 postIsolated(bus, new RenderGameOverlayEvent.Post(all,
                                         RenderGameOverlayEvent.ElementType.ALL), binding, name,
                                         serverPlayer);
-                                // RenderTickEvent(END) is where a vehicle HUD is commonly
-                                // drawn; fire it last so its geometry paints over every
-                                // overlay element captured above, matching real
-                                // Minecraft's frame order.
+                                // RenderTickEvent(END) is where MCHeli (and any similarly-shaped
+                                // mod) actually draws its vehicle HUD; fire it last so its
+                                // geometry paints over every overlay element captured above,
+                                // matching real Minecraft's frame order.
                                 postIsolated(fmlBus, new TickEvent.RenderTickEvent(
                                         TickEvent.Phase.END, partialTicks), binding, name,
                                         serverPlayer);
