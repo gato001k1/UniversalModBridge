@@ -317,11 +317,31 @@ public final class LegacyEntityRenderer extends EntityRenderer<Entity, LegacyEnt
                 + " staticFallback=false" + detail);
     }
 
+    /** Per-class reflective lookups, misses included: these run for every legacy entity every frame. */
+    private static ClassValue<java.util.Optional<java.lang.reflect.Method>> noArgMethod(String name) {
+        return new ClassValue<>() {
+            @Override protected java.util.Optional<java.lang.reflect.Method> computeValue(Class<?> type) {
+                try { return java.util.Optional.of(type.getMethod(name)); }
+                catch (Throwable missing) { return java.util.Optional.empty(); }
+            }
+        };
+    }
+
+    private static final ClassValue<java.util.Optional<java.lang.reflect.Method>> IS_REMOVED = noArgMethod("isRemoved");
+    private static final ClassValue<java.util.Optional<java.lang.reflect.Method>> LEGACY_CLASS_ID = noArgMethod("legacyClassId");
+    private static final ClassValue<java.util.Optional<java.lang.reflect.Method>> LEGACY_ENTITY_ID = noArgMethod("legacyEntityId");
+    private static final ClassValue<java.util.Optional<Field>> HANDLE_FIELD = new ClassValue<>() {
+        @Override protected java.util.Optional<Field> computeValue(Class<?> type) {
+            try { Field f = type.getDeclaredField("handle"); f.setAccessible(true); return java.util.Optional.of(f); }
+            catch (Throwable missing) { return java.util.Optional.empty(); }
+        }
+    };
+
     private static boolean isRemoved(Object value) {
         if (value == null) return false;
         try {
-            java.lang.reflect.Method method = value.getClass().getMethod("isRemoved");
-            return Boolean.TRUE.equals(method.invoke(value));
+            java.lang.reflect.Method method = IS_REMOVED.get(value.getClass()).orElse(null);
+            return method != null && Boolean.TRUE.equals(method.invoke(value));
         } catch (Throwable ignored) {
             return false;
         }
@@ -721,15 +741,16 @@ public final class LegacyEntityRenderer extends EntityRenderer<Entity, LegacyEnt
 
     private static String identity(Entity entity) {
         try {
-            var id = entity.getClass().getMethod("legacyClassId").invoke(entity);
+            java.lang.reflect.Method classId = LEGACY_CLASS_ID.get(entity.getClass()).orElse(null);
+            Object id = classId == null ? null : classId.invoke(entity);
             if (id instanceof String s && !s.isEmpty()) return s;
         } catch (Throwable ignored) { }
         try {
-            Field f = entity.getClass().getDeclaredField("handle"); f.setAccessible(true);
-            Object handle = f.get(entity);
+            Field f = HANDLE_FIELD.get(entity.getClass()).orElse(null);
+            Object handle = f == null ? null : f.get(entity);
             if (handle != null) {
-                var m = handle.getClass().getMethod("legacyEntityId");
-                return m.invoke(handle).toString();
+                java.lang.reflect.Method m = LEGACY_ENTITY_ID.get(handle.getClass()).orElse(null);
+                if (m != null) return m.invoke(handle).toString();
             }
         } catch (Throwable ignored) { }
         return null;

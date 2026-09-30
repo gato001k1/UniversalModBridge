@@ -63,7 +63,40 @@ public final class LegacyRenderCapture {
     private static final int GL_TEXTURE_2D = 3553;
     private static final int GL_BLEND = 3042;
     private static final int GL_LIGHTING = 2896;
-    private static final ThreadLocal<Capture> ACTIVE = new ThreadLocal<Capture>();
+    private static final ActiveCapture ACTIVE = new ActiveCapture();
+
+    /**
+     * The capture bound to the current thread. Every captured vertex, normal and GL call looks
+     * it up, so a plain ThreadLocal lookup per call was ~5% of the render thread in a vehicle
+     * scene. The thread that set the capture last reads it from one volatile field; any other
+     * thread falls back to the ThreadLocal, which stays the source of truth.
+     */
+    private static final class ActiveCapture {
+        private static final class Owner {
+            final Thread thread;
+            final Capture capture;
+            Owner(Thread thread, Capture capture) { this.thread = thread; this.capture = capture; }
+        }
+        private final ThreadLocal<Capture> local = new ThreadLocal<Capture>();
+        private volatile Owner fast;
+
+        Capture get() {
+            Owner o = fast;
+            if (o != null && o.thread == Thread.currentThread()) return o.capture;
+            return local.get();
+        }
+
+        void set(Capture capture) {
+            local.set(capture);
+            fast = new Owner(Thread.currentThread(), capture);
+        }
+
+        void remove() {
+            local.remove();
+            Owner o = fast;
+            if (o != null && o.thread == Thread.currentThread()) fast = null;
+        }
+    }
     private static final ThreadLocal<Minecraft> ACTIVE_MINECRAFT = new ThreadLocal<Minecraft>();
     private static final Object LOCK = new Object();
     private static RenderManager manager;
